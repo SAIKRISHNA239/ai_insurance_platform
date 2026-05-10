@@ -43,3 +43,4 @@ logs/
 # Alembic — keep versions dir but not generated migrations in git diff noise
 # (remove this if you want to commit migrations)
 # alembic/versions/*.py
+node_modules/
