@@ -1,0 +1,412 @@
+name: CI/CD Pipeline — AI Insurance Platform
+
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/ci-cd.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Automated CI/CD pipeline for the AI-Powered Healthcare Insurance Platform.
+#
+# TRIGGER STRATEGY
+# ──────────────────
+# • Pull Request → runs full quality gate (lint + type check + tests)
+# • Push to main → runs quality gate + builds Docker images + deploys (staging)
+# • Manual trigger → allows forced re-run with optional red team flag
+#
+# PIPELINE STAGES
+# ──────────────────
+# 1. backend-quality  — ruff lint, mypy type check
+# 2. backend-tests    — pytest-asyncio suite with coverage reporting
+# 3. frontend-quality — TypeScript type check (tsc --noEmit), ESLint
+# 4. frontend-e2e     — Playwright E2E tests against mocked API
+# 5. red-team         — Automated adversarial AI testing (main branch only)
+# 6. docker-build     — Build and push images to GitHub Container Registry
+# 7. deploy-staging   — Apply docker-compose to staging server (main branch only)
+#
+# SECRETS REQUIRED (set in repo Settings → Secrets):
+#   GHCR_TOKEN        — GitHub Personal Access Token with packages:write
+#   STAGING_HOST      — SSH hostname of staging server
+#   STAGING_SSH_KEY   — Private SSH key for staging server
+#   OPENAI_API_KEY    — Used by red-team job (main branch only)
+#   SECRET_KEY        — FastAPI JWT secret for integration tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_red_team:
+        description: "Run adversarial red team tests"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true    # Cancel stale PR runs when new commits are pushed
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 1: Backend Code Quality
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  backend-quality:
+    name: "Backend — Lint & Type Check"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install quality tooling
+        run: pip install ruff mypy types-python-jose types-passlib
+
+      - name: Install project dependencies (for mypy stubs)
+        run: pip install -r requirements.txt --no-deps --quiet
+
+      - name: Ruff lint
+        run: |
+          ruff check backend/ \
+            --select=E,W,F,I,B,UP \
+            --ignore=E501 \
+            --output-format=github
+
+      - name: Ruff format check
+        run: ruff format backend/ --check
+
+      - name: mypy type check
+        run: |
+          mypy backend/ \
+            --ignore-missing-imports \
+            --strict \
+            --exclude "backend/tests/" \
+            --exclude "backend/mlops/red_team.py"
+        # red_team.py excluded from strict mypy — it uses dynamic imports
+        continue-on-error: false
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 2: Backend Integration Tests
+# ─────────────────────────────────────────────────────────────────────────────
+  backend-tests:
+    name: "Backend — pytest Integration Tests"
+    runs-on: ubuntu-latest
+    needs: backend-quality
+
+    services:
+      # SQLite is used in tests (no Postgres needed), but we include Redis
+      # so tests that exercise the cache layer don't fail with connection errors.
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-test-secret-key-minimum-32-chars' }}
+      ALGORITHM: HS256
+      KAFKA_BOOTSTRAP_SERVERS: ""   # Blank → MockKafkaProducer
+      REDIS_URL: "redis://localhost:6379"
+      OPENAI_API_KEY: "sk-test-placeholder"   # Tests mock LLM calls
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx pytest-cov aiosqlite
+
+      - name: Run pytest suite
+        run: |
+          pytest backend/tests/ \
+            -v \
+            --asyncio-mode=auto \
+            --cov=backend \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -x   # Stop on first failure
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 3: Frontend Quality
+# ─────────────────────────────────────────────────────────────────────────────
+  frontend-quality:
+    name: "Frontend — TypeScript & ESLint"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npx next lint --max-warnings=0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 4: Frontend E2E Tests (Playwright)
+# ─────────────────────────────────────────────────────────────────────────────
+  frontend-e2e:
+    name: "Frontend — Playwright E2E"
+    runs-on: ubuntu-latest
+    needs: frontend-quality
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+
+      - name: Run Playwright tests
+        run: npx playwright test e2e/citation_ui.spec.ts --reporter=github
+        env:
+          CI: true
+
+      - name: Upload Playwright traces on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 7
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 5: Automated Red Team (main branch only)
+# ─────────────────────────────────────────────────────────────────────────────
+  red-team:
+    name: "Security — AI Red Team"
+    runs-on: ubuntu-latest
+    needs: [backend-tests]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event.inputs.run_red_team == 'true'
+
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      KAFKA_BOOTSTRAP_SERVERS: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt openai pytest
+
+      - name: Run red team tests
+        run: |
+          pytest backend/mlops/red_team.py::test_red_team_no_breaches \
+            -v \
+            --tb=short
+        # If any BREACH detected, pytest exits non-zero → pipeline fails
+        # A failed red team blocks Docker build and deployment
+
+      - name: Upload red team report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: red-team-report
+          path: red_team_report.json
+          retention-days: 30
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 6: Docker Build & Push
+# ─────────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: "Docker — Build & Push"
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-e2e]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata for backend image
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.run_id }}
+            GIT_SHA=${{ github.sha }}
+
+      - name: Extract metadata for frontend image
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 7: Deploy to Staging
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: "Deploy — Staging"
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: deploy
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/ai-insurance-platform
+
+            # Pull latest images
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.observability.yml \
+              pull
+
+            # Zero-downtime rolling restart
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.observability.yml \
+              up -d --no-deps --wait \
+              backend frontend
+
+            # Run Alembic migrations
+            docker compose exec -T backend \
+              alembic upgrade head
+
+            echo "✅ Staging deployment complete: ${{ github.sha }}"
+
+      - name: Verify staging health
+        run: |
+          sleep 10
+          curl --fail --retry 5 --retry-delay 3 \
+            https://staging.ai-insurance.internal/health \
+            || (echo "❌ Health check failed" && exit 1)

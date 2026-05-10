@@ -40,6 +40,7 @@ class BaseLLMClient(abc.ABC):
         user_message: str,
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """
         Generate a completion from the model.
@@ -49,6 +50,7 @@ class BaseLLMClient(abc.ABC):
             user_message: The user turn content.
             temperature: Sampling temperature (lower = more deterministic).
             max_tokens: Maximum output tokens.
+            response_format: Optional dict to enforce structured output (e.g., {"type": "json_object"}).
 
         Returns:
             The model's text response as a plain string.
@@ -94,16 +96,21 @@ class OpenAIClient(BaseLLMClient):
         user_message: str,
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+
+        response = await self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
     async def embed(self, text: str) -> list[float]:
@@ -121,7 +128,7 @@ class OpenAIClient(BaseLLMClient):
 class GeminiClient(BaseLLMClient):
     """Google Gemini provider stub."""
 
-    async def complete(self, system_prompt, user_message, temperature=0.2, max_tokens=2048) -> str:
+    async def complete(self, system_prompt, user_message, temperature=0.2, max_tokens=2048, response_format=None) -> str:
         raise NotImplementedError("GeminiClient is not yet implemented.")
 
     async def embed(self, text: str) -> list[float]:
@@ -131,7 +138,7 @@ class GeminiClient(BaseLLMClient):
 class BedrockClient(BaseLLMClient):
     """AWS Bedrock Claude provider stub."""
 
-    async def complete(self, system_prompt, user_message, temperature=0.2, max_tokens=2048) -> str:
+    async def complete(self, system_prompt, user_message, temperature=0.2, max_tokens=2048, response_format=None) -> str:
         raise NotImplementedError("BedrockClient is not yet implemented.")
 
     async def embed(self, text: str) -> list[float]:
