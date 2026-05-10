@@ -1,0 +1,60 @@
+# ─── Web Framework ────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# ─── Vector / Semantic Memory ─────────────────────────────────────────────────
+chromadb==0.5.23
+
+# ─── Data Validation & Settings ───────────────────────────────────────────────
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+
+# ─── Auth / Security ──────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.20
+
+# ─── HTTP Client ──────────────────────────────────────────────────────────────
+httpx==0.28.1
+
+# ─── Resilience ───────────────────────────────────────────────────────────────
+tenacity==9.0.0
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+structlog==24.4.0
+
+# ─── Hybrid Search (BM25 sparse leg) ──────────────────────────────────────────
+rank-bm25==0.2.2
+
+# ─── Semantic Cache (Redis) ────────────────────────────────────────────────────
+redis[asyncio]==5.2.1
+
+# ─── Kafka (EDA — optional; MockKafkaProducer used if not installed) ───────────
+aiokafka==0.11.0
+
+# ─── Document Ingestion Pipeline ──────────────────────────────────────────────
+# Core unstructured library with PDF extras (includes pdfminer, detectron2 hooks)
+unstructured[pdf]==0.16.11
+# Required by unstructured hi_res strategy for layout detection
+# detectron2 must be installed separately: see https://detectron2.readthedocs.io/
+# pip install 'git+https://github.com/facebookresearch/detectron2.git'
+
+# Semantic chunking — lightweight local embedding model
+sentence-transformers==3.3.1
+
+# ─── PHI Sanitization (Presidio — optional production backend) ─────────────────
+# Uncomment when activating SANITIZER_BACKEND=presidio
+# presidio-analyzer==2.2.354
+# presidio-anonymizer==2.2.354
+# spacy==3.8.3
+# en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1

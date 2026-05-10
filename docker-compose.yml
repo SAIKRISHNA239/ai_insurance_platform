@@ -1,0 +1,100 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named volumes for data persistence
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  chroma_data:
+    driver: local
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Isolated network — all inter-service traffic stays private
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  ai_insurance_net:
+    driver: bridge
+
+services:
+
+  # ─── PostgreSQL 16 ────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: insurance_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-insurance_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-insurance_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-insurance_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - ai_insurance_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-insurance_user} -d ${POSTGRES_DB:-insurance_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ─── ChromaDB — Vector Semantic Memory ────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: insurance_chromadb
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/data
+      ANONYMIZED_TELEMETRY: "FALSE"
+      ALLOW_RESET: "TRUE"
+    volumes:
+      - chroma_data:/chroma/data
+    ports:
+      - "8001:8000"          # Host 8001 → Container 8000 (avoids clash with FastAPI)
+    networks:
+      - ai_insurance_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── FastAPI Backend ───────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: insurance_backend
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      # Override DB host to service name within Docker network
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insurance_user}:${POSTGRES_PASSWORD:-insurance_pass}@postgres:5432/${POSTGRES_DB:-insurance_db}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      # Hot-reload: mount source so changes reflect without rebuild in dev
+      - ../backend:/app/backend
+      - ../alembic:/app/alembic
+      - ../datasets:/app/datasets
+    networks:
+      - ai_insurance_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

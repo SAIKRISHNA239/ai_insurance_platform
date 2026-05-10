@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets — NEVER commit real .env
+.env
+!.env.example
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Docker
+docker/data/
+
+# Datasets (can be large)
+datasets/*.csv
+datasets/*.json
+datasets/*.parquet
+
+# Logs
+*.log
+logs/
+
+# Alembic — keep versions dir but not generated migrations in git diff noise
+# (remove this if you want to commit migrations)
+# alembic/versions/*.py
