@@ -1,0 +1,22 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Darwin",
+  "include": [
+    "backend",
+    "seed.py"
+  ],
+  "exclude": [
+    ".venv",
+    "frontend",
+    "**/__pycache__",
+    "**/.pytest_cache"
+  ],
+  "extraPaths": [
+    "."
+  ],
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true,
+  "reportMissingModuleSource": "none"
+}

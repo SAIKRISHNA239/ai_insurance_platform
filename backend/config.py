@@ -51,10 +51,13 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai", "gemini", "bedrock"] = "openai"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
 
     # ── Embedding ─────────────────────────────────────────────────────────
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+
 
     # ── Redis (Semantic Cache) ─────────────────────────────────────────────
     redis_host: str = "redis"

@@ -37,7 +37,7 @@ from backend.database.vector_client import get_chroma_client
 from backend.middleware.auth import JWTAuthMiddleware, RBACMiddleware
 
 # ── Routers ────────────────────────────────────────────────────────────────────
-from backend.api.routers import auth, claims, policies, applications
+from backend.api.routers import auth, claims, policies, applications, underwriting
 
 logger = structlog.get_logger(__name__)
 
@@ -158,6 +158,7 @@ def create_app() -> FastAPI:
     app.include_router(claims.router, prefix=API_PREFIX)
     app.include_router(policies.router, prefix=API_PREFIX)
     app.include_router(applications.router, prefix=API_PREFIX)
+    app.include_router(underwriting.router, prefix=API_PREFIX)
 
     # ── Health endpoint ────────────────────────────────────────────────────
     @app.get(

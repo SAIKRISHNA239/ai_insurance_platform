@@ -126,13 +126,129 @@ class OpenAIClient(BaseLLMClient):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GeminiClient(BaseLLMClient):
-    """Google Gemini provider stub."""
+    """Google Gemini provider using the google-genai SDK (v2.x)."""
 
-    async def complete(self, system_prompt, user_message, temperature=0.2, max_tokens=2048, response_format=None) -> str:
-        raise NotImplementedError("GeminiClient is not yet implemented.")
+    def __init__(self) -> None:
+        try:
+            from google import genai
+            from google.genai import types as genai_types  # noqa: F401 – ensure importable
+        except ImportError:
+            raise ImportError("Install 'google-genai': pip install google-genai")
+
+        settings = get_settings()
+        if not settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not set in .env")
+
+        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self._model  = settings.gemini_model
+
+        logger.info("gemini_client_initialized", model=self._model)
+
+    async def complete(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        response_format: dict | None = None,
+    ) -> str:
+        import asyncio
+        from google.genai import types as genai_types
+
+        contents = [
+            genai_types.Content(
+                role="user",
+                parts=[genai_types.Part(text=f"{system_prompt}\n\n{user_message}")],
+            )
+        ]
+        config = genai_types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+
+        # google-genai v2 sync → run in thread executor so we don't block the loop
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self._client.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=config,
+            ),
+        )
+        return response.text or ""
+
+    async def stream_complete(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float = 0.3,
+        max_tokens: int = 2048,
+    ):
+        """
+        Async generator that yields text tokens from a Gemini streaming call.
+        Usage:
+            async for token in client.stream_complete(sys, usr):
+                ...
+        """
+        import asyncio
+        import queue
+        import threading
+        from google.genai import types as genai_types
+
+        contents = [
+            genai_types.Content(
+                role="user",
+                parts=[genai_types.Part(text=f"{system_prompt}\n\n{user_message}")],
+            )
+        ]
+        config = genai_types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+
+        token_queue: queue.Queue[str | None] = queue.Queue()
+
+        def _stream_in_thread():
+            try:
+                for chunk in self._client.models.generate_content_stream(
+                    model=self._model,
+                    contents=contents,
+                    config=config,
+                ):
+                    if chunk.text:
+                        token_queue.put(chunk.text)
+            except Exception as exc:
+                token_queue.put(f"__ERROR__:{exc}")
+            finally:
+                token_queue.put(None)  # sentinel
+
+        thread = threading.Thread(target=_stream_in_thread, daemon=True)
+        thread.start()
+
+        while True:
+            token = await asyncio.get_event_loop().run_in_executor(None, token_queue.get)
+            if token is None:
+                break
+            if token.startswith("__ERROR__:"):
+                raise RuntimeError(token[len("__ERROR__:"):])
+            yield token
 
     async def embed(self, text: str) -> list[float]:
-        raise NotImplementedError("GeminiClient is not yet implemented.")
+        import asyncio
+        from google.genai import types as genai_types
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self._client.models.embed_content(
+                model="text-embedding-004",
+                contents=text,
+                config=genai_types.EmbedContentConfig(output_dimensionality=768),
+            ),
+        )
+        return response.embeddings[0].values
+
 
 
 class BedrockClient(BaseLLMClient):

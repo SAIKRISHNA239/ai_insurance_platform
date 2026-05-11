@@ -68,6 +68,7 @@ class ApplicationResponse(BaseModel):
     underwriting_score: float | None
     risk_tier: RiskTier | None
     status: ApplicationStatus
+    ai_underwriting_notes: str | None = None
     reviewed_by: uuid.UUID | None
     reviewed_at: datetime | None
     created_at: datetime

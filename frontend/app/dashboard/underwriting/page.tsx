@@ -34,6 +34,7 @@ import {
   type Application,
   type Citation,
   type UnderwritingDecision,
+  type UnderwritingRoute,
   applicationsAPI,
 } from "@/lib/api";
 import GenAIAssistant from "@/components/GenAIAssistant";

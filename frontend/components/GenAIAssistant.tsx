@@ -1,58 +1,44 @@
-"use client";
+'use client';
 
 /**
  * components/GenAIAssistant.tsx
- * ──────────────────────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────────
  * Streaming GenAI chat interface with citation-first rendering.
  *
- * CITATION PARSING LOGIC
- * ───────────────────────
- * The FastAPI backend instructs the LLM to annotate its response with
- * citation markers using the format [^N] where N is an integer ID.
- * Example LLM output:
- *   "The applicant has a history of atrial fibrillation [^1] and was
- *    prescribed warfarin in Q2 2024 [^2]."
- *
- * This component:
- *   1. Receives tokens progressively from the SSE stream.
- *   2. Receives the final `Citation[]` array when the stream ends.
- *   3. On render, splits the accumulated text on the regex /\[\^(\d+)\]/g.
- *   4. Replaces each marker with a clickable <CitationBadge> that fires
- *      the `onCitationClick(citation)` callback.
- *   5. The parent dashboard wires `onCitationClick` to the CitationViewer,
- *      which jumps the PDF to the cited page and draws the bounding box.
- *
- * STREAMING STATE MACHINE
- * ─────────────────────────
- * idle → streaming → done | error
- * Abort is handled via the AbortController returned by `streamUnderwritingAssistant`.
+ * FALLBACK STRATEGY
+ * ─────────────────
+ * When the streaming endpoint returns an error (e.g. Gemini API key not set,
+ * ChromaDB offline), the component falls back to displaying the
+ * ai_underwriting_notes from the database. This keeps the UI functional even
+ * without a live LLM connection.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { type Citation, streamUnderwritingAssistant } from "@/lib/api";
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { type Citation, type Application, streamUnderwritingAssistant } from '@/lib/api';
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
-
-type StreamState = "idle" | "streaming" | "done" | "error";
+type StreamState = 'idle' | 'streaming' | 'done' | 'fallback' | 'error';
 
 interface GenAIAssistantProps {
   applicationId: string | null;
+  application?: Application | null;       // ← used for fallback AI notes
   onCitationClick: (citation: Citation) => void;
   className?: string;
 }
 
-// ─── Citation Badge ────────────────────────────────────────────────────────────
+// ── Citation Badge ─────────────────────────────────────────────────────────────
 
-interface CitationBadgeProps {
+function CitationBadge({
+  id,
+  citation,
+  onClick,
+}: {
   id: number;
   citation: Citation | undefined;
-  onClick: (citation: Citation) => void;
-}
-
-function CitationBadge({ id, citation, onClick }: CitationBadgeProps) {
+  onClick: (c: Citation) => void;
+}) {
   if (!citation) {
     return (
-      <sup className="inline-flex items-center justify-center w-4 h-4 text-[9px] font-bold rounded-full bg-slate-600 text-slate-300 mx-0.5 cursor-default">
+      <sup className="inline-flex items-center justify-center w-4 h-4 text-[9px] font-bold rounded-full bg-surface-variant text-on-surface-variant mx-0.5 cursor-default">
         {id}
       </sup>
     );
@@ -62,32 +48,22 @@ function CitationBadge({ id, citation, onClick }: CitationBadgeProps) {
       onClick={() => onClick(citation)}
       title={`Source: ${citation.document_name} — "${citation.excerpt.slice(0, 80)}..."`}
       className="
-        inline-flex items-center justify-center
-        w-4 h-4 mx-0.5 rounded-full
-        text-[9px] font-bold
-        bg-violet-500/20 text-violet-300
-        border border-violet-500/40
-        hover:bg-violet-500/40 hover:border-violet-400
-        transition-all duration-150 cursor-pointer
-        focus:outline-none focus:ring-1 focus:ring-violet-400
+        inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5
+        rounded bg-primary-container/20 border border-primary/40
+        text-primary font-data-mono text-[11px]
+        hover:bg-primary-container/40 transition-colors align-middle
+        focus:ring-1 focus:ring-primary focus:outline-none
       "
       aria-label={`Citation ${id}: ${citation.document_name}`}
     >
-      {id}
+      <span className="material-symbols-outlined text-[12px]">description</span>
+      <span>{id}</span>
     </button>
   );
 }
 
-// ─── Text Renderer with Citation Markers ───────────────────────────────────────
+// ── Citation Text Renderer ─────────────────────────────────────────────────────
 
-/**
- * Parses the LLM response text and replaces [^N] markers with
- * interactive CitationBadge components.
- *
- * Regex: /\[\^(\d+)\]/g
- * Splits text into alternating [text, markerGroup, text, markerGroup, ...]
- * The captured group (digits) is the citation ID.
- */
 function CitationText({
   text,
   citations,
@@ -99,16 +75,12 @@ function CitationText({
 }) {
   const citationMap = new Map(citations.map((c) => [c.id, c]));
   const CITATION_RE = /\[\^(\d+)\]/g;
-
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
   while ((match = CITATION_RE.exec(text)) !== null) {
-    // Text before the marker
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
     const citId = parseInt(match[1], 10);
     parts.push(
       <CitationBadge
@@ -120,101 +92,149 @@ function CitationText({
     );
     lastIndex = match.index + match[0].length;
   }
-
-  // Remaining text after the last marker
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
 
   return (
-    <span className="leading-relaxed whitespace-pre-wrap font-mono text-sm text-slate-200">
+    <span className="leading-relaxed whitespace-pre-wrap font-body-sm text-body-sm text-on-surface">
       {parts}
     </span>
   );
 }
 
-// ─── Main Component ────────────────────────────────────────────────────────────
+// ── Typing Animation ───────────────────────────────────────────────────────────
+
+/** Animates text appearing character by character from a static string. */
+function TypewriterText({
+  text,
+  citations,
+  onCitationClick,
+  onDone,
+}: {
+  text: string;
+  citations: Citation[];
+  onCitationClick: (c: Citation) => void;
+  onDone: () => void;
+}) {
+  const [displayed, setDisplayed] = useState('');
+  const indexRef = useRef(0);
+
+  useEffect(() => {
+    indexRef.current = 0;
+    setDisplayed('');
+    const id = setInterval(() => {
+      indexRef.current += 3; // 3 chars per tick feels natural
+      setDisplayed(text.slice(0, indexRef.current));
+      if (indexRef.current >= text.length) {
+        clearInterval(id);
+        onDone();
+      }
+    }, 16);
+    return () => clearInterval(id);
+  }, [text, onDone]);
+
+  return (
+    <CitationText
+      text={displayed}
+      citations={citations}
+      onCitationClick={onCitationClick}
+    />
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function GenAIAssistant({
   applicationId,
+  application,
   onCitationClick,
-  className = "",
+  className = '',
 }: GenAIAssistantProps) {
-  const [streamState, setStreamState] = useState<StreamState>("idle");
-  const [accumulatedText, setAccumulatedText] = useState("");
-  const [citations, setCitations] = useState<Citation[]>([]);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [streamState, setStreamState]         = useState<StreamState>('idle');
+  const [accumulatedText, setAccumulatedText]  = useState('');
+  const [fallbackText, setFallbackText]        = useState('');
+  const [typewriterDone, setTypewriterDone]    = useState(false);
+  const [citations, setCitations]              = useState<Citation[]>([]);
+  const [errorMsg, setErrorMsg]                = useState<string | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef  = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom as new tokens arrive
+  // Auto-scroll on new tokens
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [accumulatedText]);
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [accumulatedText, fallbackText]);
 
-  const startStream = useCallback(() => {
-    if (!applicationId || streamState === "streaming") return;
-
-    // Reset state
-    setAccumulatedText("");
-    setCitations([]);
-    setErrorMsg(null);
-    setStreamState("streaming");
-
-    abortRef.current = streamUnderwritingAssistant(applicationId, {
-      onToken: (token) =>
-        setAccumulatedText((prev) => prev + token),
-
-      onCitations: (newCitations) =>
-        setCitations(newCitations),
-
-      onError: (err) => {
-        setErrorMsg(err);
-        setStreamState("error");
-      },
-
-      onDone: () => setStreamState("done"),
-    });
-  }, [applicationId, streamState]);
-
-  const cancelStream = useCallback(() => {
-    abortRef.current?.abort();
-    setStreamState("idle");
-  }, []);
-
-  // Auto-start when applicationId changes
+  // Reset when application changes
   useEffect(() => {
     if (applicationId) {
-      setStreamState("idle");
-      setAccumulatedText("");
+      setStreamState('idle');
+      setAccumulatedText('');
+      setFallbackText('');
       setCitations([]);
+      setErrorMsg(null);
+      setTypewriterDone(false);
     }
   }, [applicationId]);
 
   // Cleanup on unmount
-  useEffect(() => {
-    return () => abortRef.current?.abort();
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const startStream = useCallback(() => {
+    if (!applicationId || streamState === 'streaming') return;
+    setAccumulatedText('');
+    setFallbackText('');
+    setCitations([]);
+    setErrorMsg(null);
+    setStreamState('streaming');
+    setTypewriterDone(false);
+
+    abortRef.current = streamUnderwritingAssistant(applicationId, {
+      onToken:     (token) => setAccumulatedText((prev) => prev + token),
+      onCitations: (newCitations) => setCitations(newCitations),
+      onError: (err) => {
+        // ── Graceful fallback to DB notes ─────────────────────────────────
+        const dbNotes = application?.ai_underwriting_notes;
+        if (dbNotes) {
+          setFallbackText(dbNotes);
+          setStreamState('fallback');
+        } else {
+          setErrorMsg(`AI stream unavailable: ${err}. No database notes available.`);
+          setStreamState('error');
+        }
+      },
+      onDone: () => setStreamState('done'),
+    });
+  }, [applicationId, streamState, application]);
+
+  const cancelStream = useCallback(() => {
+    abortRef.current?.abort();
+    setStreamState('idle');
   }, []);
 
-  const isStreaming = streamState === "streaming";
+  const isStreaming = streamState === 'streaming';
+  const isDone      = streamState === 'done' || streamState === 'fallback';
+  const showContent = accumulatedText || fallbackText;
 
   return (
-    <div
-      className={`flex flex-col h-full bg-slate-900/60 border border-slate-700/50 rounded-xl overflow-hidden backdrop-blur-sm ${className}`}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-700/50 bg-slate-800/50">
-        <div className="flex items-center gap-2.5">
-          <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-          <h2 className="text-sm font-semibold text-slate-100 tracking-wide">
-            AI Underwriting Assistant
-          </h2>
+    <div className={`flex flex-col bg-surface overflow-hidden ${className}`}>
+      {/* ── Panel header ────────────────────────────────────────────────── */}
+      <div className="h-14 px-6 flex items-center justify-between border-b border-outline-variant bg-surface-container-lowest shrink-0">
+        <div className="flex items-center gap-2">
+          <span
+            className="material-symbols-outlined text-primary text-xl"
+            style={{ fontVariationSettings: "'FILL' 1" }}
+          >
+            auto_awesome
+          </span>
+          <h2 className="font-headline-md text-headline-md text-on-surface">Medical Summary</h2>
           {citations.length > 0 && (
-            <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">
+            <span className="px-1.5 py-0.5 font-label-caps text-label-caps rounded-full bg-primary-container/20 text-primary border border-primary/30">
               {citations.length} sources
+            </span>
+          )}
+          {streamState === 'fallback' && (
+            <span className="px-1.5 py-0.5 font-label-caps text-label-caps rounded-full bg-tertiary-container/20 text-tertiary border border-tertiary/30">
+              DB Notes
             </span>
           )}
         </div>
@@ -223,7 +243,7 @@ export default function GenAIAssistant({
           {isStreaming ? (
             <button
               onClick={cancelStream}
-              className="px-3 py-1 text-xs rounded-md bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 transition-colors"
+              className="px-3 py-1 text-xs rounded-lg bg-error-container/20 text-error border border-error-container/30 hover:bg-error-container/30 transition-colors"
             >
               Stop
             </button>
@@ -232,62 +252,110 @@ export default function GenAIAssistant({
               onClick={startStream}
               disabled={!applicationId}
               className="
-                px-3 py-1 text-xs rounded-md
-                bg-violet-500/20 text-violet-300 border border-violet-500/40
-                hover:bg-violet-500/30
+                px-3 py-1 text-xs rounded-lg
+                bg-primary-container/20 text-primary border border-primary/40
+                hover:bg-primary-container/40
                 disabled:opacity-40 disabled:cursor-not-allowed
                 transition-colors
               "
             >
-              {streamState === "done" ? "Regenerate" : "Analyze"}
+              {isDone ? 'Regenerate' : 'Analyze'}
             </button>
           )}
         </div>
       </div>
 
-      {/* Content area */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-5 py-4 space-y-4 scroll-smooth"
-      >
-        {streamState === "idle" && !accumulatedText && (
+      {/* ── Content area ─────────────────────────────────────────────────── */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth">
+
+        {/* Idle empty state */}
+        {streamState === 'idle' && !showContent && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-12">
-            <div className="w-10 h-10 rounded-full bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400 text-lg">
-              ✦
+            <div className="w-10 h-10 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <span className="material-symbols-outlined text-primary">auto_awesome</span>
             </div>
-            <p className="text-sm text-slate-400 max-w-xs">
+            <p className="font-body-sm text-body-sm text-on-surface-variant max-w-xs">
               {applicationId
-                ? "Click Analyze to generate an AI underwriting summary with cited evidence."
-                : "Select an application to begin."}
+                ? 'Click Analyze to generate an AI underwriting summary with cited evidence.'
+                : 'Select an application to begin.'}
             </p>
           </div>
         )}
 
+        {/* Streaming / done text */}
         {(accumulatedText || isStreaming) && (
-          <div className="relative">
-            <CitationText
-              text={accumulatedText}
-              citations={citations}
-              onCitationClick={onCitationClick}
-            />
-            {/* Blinking cursor during streaming */}
-            {isStreaming && (
-              <span className="inline-block w-0.5 h-4 ml-0.5 bg-violet-400 animate-pulse align-text-bottom" />
-            )}
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-5 space-y-4 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary to-secondary" />
+            <div className="flex items-center justify-between">
+              <span className="font-label-caps text-label-caps text-primary tracking-wider uppercase">
+                AI Generated Synthesis
+              </span>
+              {isStreaming && (
+                <span className="font-data-mono text-data-mono text-on-surface-variant text-xs animate-pulse">
+                  Generating…
+                </span>
+              )}
+            </div>
+            <div className="font-body-sm text-body-sm text-on-surface leading-relaxed">
+              <CitationText
+                text={accumulatedText}
+                citations={citations}
+                onCitationClick={onCitationClick}
+              />
+              {isStreaming && (
+                <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-text-bottom" />
+              )}
+            </div>
           </div>
         )}
 
-        {streamState === "error" && (
-          <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3">
-            <p className="text-xs text-red-300 font-mono">{errorMsg}</p>
+        {/* Fallback DB notes with typewriter animation */}
+        {fallbackText && (
+          <div className="rounded-lg border border-tertiary/30 bg-tertiary/5 p-5 space-y-4 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-tertiary to-primary" />
+            <div className="flex items-center justify-between">
+              <span className="font-label-caps text-label-caps text-tertiary tracking-wider uppercase">
+                Underwriting Assessment
+              </span>
+              {!typewriterDone && (
+                <span className="font-data-mono text-data-mono text-on-surface-variant text-xs animate-pulse">
+                  Loading…
+                </span>
+              )}
+            </div>
+            <div className="font-body-sm text-body-sm text-on-surface leading-relaxed">
+              <TypewriterText
+                text={fallbackText}
+                citations={[]}
+                onCitationClick={onCitationClick}
+                onDone={() => setTypewriterDone(true)}
+              />
+              {!typewriterDone && (
+                <span className="inline-block w-0.5 h-4 ml-0.5 bg-tertiary animate-pulse align-text-bottom" />
+              )}
+            </div>
+            <p className="font-label-caps text-label-caps text-on-surface-variant">
+              ⚡ Loaded from database · Connect Gemini API for live analysis
+            </p>
+          </div>
+        )}
+
+        {/* Error state */}
+        {streamState === 'error' && (
+          <div className="rounded-lg bg-error-container/20 border border-error-container/30 px-4 py-3 flex items-start gap-3">
+            <span className="material-symbols-outlined text-error text-[20px] mt-0.5 shrink-0">error</span>
+            <div>
+              <p className="font-body-sm text-body-sm text-error font-semibold">AI Analysis Unavailable</p>
+              <p className="font-data-mono text-data-mono text-on-surface-variant mt-1 text-xs">{errorMsg}</p>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Citation source list */}
-      {citations.length > 0 && streamState === "done" && (
-        <div className="border-t border-slate-700/50 px-5 py-3 bg-slate-800/30">
-          <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest mb-2">
+      {/* ── Source list (shown after done) ──────────────────────────────── */}
+      {citations.length > 0 && streamState === 'done' && (
+        <div className="border-t border-outline-variant px-5 py-3 bg-surface-container-lowest shrink-0">
+          <p className="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-2">
             Sources
           </p>
           <div className="flex flex-col gap-1">
@@ -296,21 +364,21 @@ export default function GenAIAssistant({
                 key={c.id}
                 onClick={() => onCitationClick(c)}
                 className="
-                  flex items-start gap-2 text-left px-3 py-1.5 rounded-md
-                  bg-slate-800/50 hover:bg-violet-500/10
-                  border border-transparent hover:border-violet-500/20
+                  flex items-start gap-2 text-left px-3 py-1.5 rounded-lg
+                  bg-surface-container hover:bg-primary/10
+                  border border-transparent hover:border-primary/20
                   transition-all group
                 "
               >
-                <span className="flex-shrink-0 w-4 h-4 mt-0.5 rounded-full bg-violet-500/20 text-violet-300 flex items-center justify-center text-[9px] font-bold">
+                <span className="flex-shrink-0 w-5 h-5 mt-0.5 rounded-full bg-primary-container/20 text-primary flex items-center justify-center font-label-caps text-label-caps">
                   {c.id}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-xs text-slate-300 font-medium truncate group-hover:text-violet-300 transition-colors">
+                  <p className="font-body-sm text-body-sm text-on-surface font-medium truncate group-hover:text-primary transition-colors">
                     {c.document_name}
                   </p>
-                  <p className="text-[10px] text-slate-500 truncate">
-                    Page {c.bounding_box.page} — "{c.excerpt.slice(0, 60)}..."
+                  <p className="font-data-mono text-data-mono text-on-surface-variant truncate">
+                    Page {c.bounding_box.page} — &quot;{c.excerpt.slice(0, 60)}...&quot;
                   </p>
                 </div>
               </button>

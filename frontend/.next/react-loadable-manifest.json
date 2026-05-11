@@ -1,0 +1,8 @@
+{
+  "components/ui/CitationViewer.tsx -> react-pdf": {
+    "id": "components/ui/CitationViewer.tsx -> react-pdf",
+    "files": [
+      "static/chunks/_app-pages-browser_node_modules_react-pdf_dist_esm_index_js.js"
+    ]
+  }
+}

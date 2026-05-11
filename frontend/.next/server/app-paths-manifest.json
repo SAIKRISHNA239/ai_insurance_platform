@@ -1,0 +1,10 @@
+{
+  "/settings/page": "app/settings/page.js",
+  "/applications/page": "app/applications/page.js",
+  "/claims/page": "app/claims/page.js",
+  "/marketplace/page": "app/marketplace/page.js",
+  "/support/page": "app/support/page.js",
+  "/login/page": "app/login/page.js",
+  "/underwriting/page": "app/underwriting/page.js",
+  "/overview/page": "app/overview/page.js"
+}

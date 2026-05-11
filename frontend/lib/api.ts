@@ -5,19 +5,18 @@
  *
  * ARCHITECTURE DECISIONS
  * ───────────────────────
- * • All non-streaming calls use the native `fetch` API (available in Next.js
- *   App Router server and client components) — no extra Axios dependency.
- * • The `streamUnderwritingAssistant` function uses the EventSource / fetch
- *   ReadableStream pattern to consume SSE from FastAPI's StreamingResponse.
- * • All API types are co-located here so components import one source of truth.
- * • The `getAuthHeaders` function reads the JWT from a cookie (httpOnly) set
- *   by the FastAPI /auth/token endpoint.
+ * • API is mounted at /api/v1 — all calls include this prefix.
+ * • JWT token is obtained via POST /api/v1/auth/token (OAuth2 password grant).
+ * • Token is stored in localStorage for dev; replaced with httpOnly cookie in prod.
+ * • Streaming uses fetch ReadableStream (not EventSource) to support auth headers.
  */
 
 // ─── Base Configuration ────────────────────────────────────────────────────────
 
-const API_BASE_URL =
+export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const API_V1 = `${API_BASE_URL}/api/v1`;
 
 // ─── Shared Types ──────────────────────────────────────────────────────────────
 
@@ -28,36 +27,32 @@ export interface APIError {
 
 /**
  * BoundingBox coordinates in PDF page space.
- * Origin (0,0) is top-left of the page.
- * All values are fractions of the page dimensions [0.0–1.0] for
- * resolution-independent rendering in the CitationViewer.
+ * All values are fractions of the page dimensions [0.0–1.0].
  */
 export interface BoundingBox {
-  page: number;      // 1-indexed PDF page number
-  x: number;        // Left edge [0–1]
-  y: number;        // Top edge [0–1]
-  width: number;    // Box width [0–1]
-  height: number;   // Box height [0–1]
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
  * A single citation linking an AI-generated claim to a source document.
- * The backend embeds citation markers as `[^1]`, `[^2]` etc. in the
- * LLM response text. This object provides the PDF metadata for rendering.
  */
 export interface Citation {
-  id: number;              // Matches the [^id] marker in the response text
-  chunk_id: string;        // Vector DB chunk ID for traceability
-  document_name: string;   // Human-readable document title
-  document_url: string;    // URL to the source PDF served by backend
+  id: number;
+  chunk_id: string;
+  document_name: string;
+  document_url: string;
   bounding_box: BoundingBox;
-  excerpt: string;         // The exact text passage the AI cited
+  excerpt: string;
 }
 
 export interface StreamChunk {
   type: "token" | "citations" | "error" | "done";
-  content?: string;        // Text token (type === "token")
-  citations?: Citation[];  // Final citation list (type === "citations")
+  content?: string;
+  citations?: Citation[];
   error?: string;
 }
 
@@ -88,15 +83,26 @@ export interface UnderwritingDecision {
   } | null;
 }
 
+export type ApplicationStatus =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "approved"
+  | "declined"
+  | "withdrawn";
+
 export interface Application {
   id: string;
   application_number: string;
+  applicant_id: string;
   policy_type: string;
-  status: string;
+  status: ApplicationStatus;
   requested_coverage_limit: string;
   underwriting_score: number | null;
   risk_tier: RiskTier | null;
   ai_underwriting_notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   created_at: string;
 }
 
@@ -128,16 +134,32 @@ export interface PaginatedResponse<T> {
   items: T[];
 }
 
-// ─── Auth ──────────────────────────────────────────────────────────────────────
+// ─── Auth Types ────────────────────────────────────────────────────────────────
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  role: string;
+}
+
+// ─── Auth Helpers ──────────────────────────────────────────────────────────────
+
+export function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("access_token");
+}
+
+export function setStoredToken(token: string): void {
+  if (typeof window !== "undefined") localStorage.setItem("access_token", token);
+}
+
+export function clearStoredToken(): void {
+  if (typeof window !== "undefined") localStorage.removeItem("access_token");
+}
 
 function getAuthHeaders(): HeadersInit {
-  // In production, the JWT is stored in an httpOnly cookie managed by the
-  // Next.js middleware (middleware.ts) and forwarded to FastAPI.
-  // For dev, we read from localStorage as a fallback.
-  const token =
-    typeof window !== "undefined"
-      ? localStorage.getItem("access_token")
-      : null;
+  const token = getStoredToken();
   return token
     ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
     : { "Content-Type": "application/json" };
@@ -149,7 +171,7 @@ async function apiFetch<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${API_V1}${path}`, {
     ...options,
     headers: { ...getAuthHeaders(), ...options?.headers },
   });
@@ -163,6 +185,39 @@ async function apiFetch<T>(
   return response.json() as Promise<T>;
 }
 
+// ─── Auth API ─────────────────────────────────────────────────────────────────
+
+export const authAPI = {
+  /**
+   * Login with email + password. Stores the JWT in localStorage automatically.
+   */
+  login: async (email: string, password: string): Promise<TokenResponse> => {
+    const body = new URLSearchParams({ username: email, password });
+    const response = await fetch(`${API_V1}/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: "Login failed" }));
+      throw { detail: err.detail, status: response.status } as APIError;
+    }
+    const data: TokenResponse = await response.json();
+    setStoredToken(data.access_token);
+    return data;
+  },
+
+  logout: () => clearStoredToken(),
+
+  register: (payload: {
+    email: string;
+    password: string;
+    full_name: string;
+    role?: string;
+  }): Promise<unknown> =>
+    apiFetch("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
+};
+
 // ─── Applications API ──────────────────────────────────────────────────────────
 
 export const applicationsAPI = {
@@ -172,8 +227,67 @@ export const applicationsAPI = {
   get: (applicationId: string): Promise<Application> =>
     apiFetch(`/applications/${applicationId}`),
 
-  getDecision: (applicationId: string): Promise<UnderwritingDecision> =>
-    apiFetch(`/applications/${applicationId}/decision`),
+  /**
+   * NOTE: The backend currently has PATCH /applications/{id}/underwrite for
+   * posting a decision. The "getDecision" endpoint is a frontend convenience
+   * that reads the underwriting fields from the Application object directly,
+   * since there is no separate /decision endpoint in the current backend.
+   * This method reconstructs a UnderwritingDecision from the Application data.
+   */
+  getDecision: async (applicationId: string): Promise<UnderwritingDecision | null> => {
+    try {
+      const app = await apiFetch<Application>(`/applications/${applicationId}`);
+      if (!app.underwriting_score || !app.risk_tier) return null;
+
+      // Map backend fields to the UnderwritingDecision shape
+      const score = app.underwriting_score ?? 0;
+      const route: UnderwritingRoute =
+        score < 50
+          ? "stp_approved"
+          : score < 80
+          ? "conditional_approved"
+          : "manual_review";
+
+      return {
+        application_id: app.id,
+        route,
+        risk_tier: app.risk_tier,
+        net_score: Math.round(score),
+        table_rating: score >= 80 ? 4 : score >= 60 ? 2 : 0,
+        suggested_premium: null,
+        permanent_exclusions: [],
+        routing_reason: app.ai_underwriting_notes ?? "Score-based automatic routing.",
+        ai_assistant_summary: app.ai_underwriting_notes
+          ? {
+              clinical_summary: app.ai_underwriting_notes,
+              key_impairments: [],
+              data_discrepancies: [],
+              proposed_decision: route === "stp_approved" ? "APPROVE" : route === "manual_review" ? "TABLE_RATING" : "POSTPONE",
+              reasoning: app.ai_underwriting_notes,
+              suggested_requirements: [],
+            }
+          : null,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  submitDecision: (
+    applicationId: string,
+    payload: {
+      status: ApplicationStatus;
+      underwriting_score?: number;
+      risk_tier?: RiskTier;
+      suggested_premium?: string;
+      ai_underwriting_notes?: string;
+      decision_notes?: string;
+    }
+  ): Promise<Application> =>
+    apiFetch(`/applications/${applicationId}/underwrite`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
 };
 
 // ─── Claims API ────────────────────────────────────────────────────────────────
@@ -188,35 +302,22 @@ export const claimsAPI = {
   get: (claimId: string): Promise<Claim> =>
     apiFetch(`/claims/${claimId}`),
 
-  intake: (payload: Record<string, unknown>): Promise<{ claim_id: string; adjudication_state: string }> =>
-    apiFetch("/claims/intake", {
-      method: "POST",
-      body: JSON.stringify(payload),
+  updateStatus: (
+    claimId: string,
+    status: ClaimStatus,
+    denial_reason?: string
+  ): Promise<Claim> =>
+    apiFetch(`/claims/${claimId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, denial_reason }),
     }),
 };
 
 // ─── Streaming Underwriting Assistant ─────────────────────────────────────────
 
 /**
- * Streams the GenAI Underwriting Assistant response using the Fetch
- * ReadableStream API (SSE-compatible).
- *
- * FastAPI sends newline-delimited JSON chunks, each matching the
- * `StreamChunk` interface. The caller provides two callbacks:
- *   onToken:     Called for each text token to update the UI progressively.
- *   onCitations: Called once at the end with the full citation list.
- *   onError:     Called on stream error.
- *   onDone:      Called when the stream completes cleanly.
- *
- * WHY NOT `EventSource`?
- * The native EventSource API does not support POST requests or custom
- * Authorization headers — both required here. We use fetch() with a
- * ReadableStream reader instead, which is fully compatible with FastAPI's
- * `StreamingResponse` using `media_type="text/event-stream"`.
- *
- * @param applicationId  The underwriting application to analyze.
- * @param callbacks      Event handlers for each stream chunk type.
- * @returns              AbortController.signal to cancel the stream.
+ * Streams the GenAI Underwriting Assistant response.
+ * FastAPI sends newline-delimited JSON chunks via StreamingResponse.
  */
 export function streamUnderwritingAssistant(
   applicationId: string,
@@ -232,10 +333,10 @@ export function streamUnderwritingAssistant(
   (async () => {
     try {
       const response = await fetch(
-        `${API_BASE_URL}/underwriting/${applicationId}/ai-summary/stream`,
+        `${API_V1}/underwriting/${applicationId}/ai-summary/stream`,
         {
           method: "GET",
-          headers: getAuthHeaders(),
+          headers: getAuthHeaders() as Record<string, string>,
           signal: controller.signal,
         }
       );
@@ -287,4 +388,38 @@ export function streamUnderwritingAssistant(
   })();
 
   return controller;
+}
+
+// ─── Dashboard Stats ───────────────────────────────────────────────────────────
+
+export interface DashboardStats {
+  totalClaims: number;
+  totalApplications: number;
+  approvedClaims: number;
+  pendingReview: number;
+}
+
+/**
+ * Derives dashboard KPI stats from paginated list endpoints.
+ * In a production system this would be a dedicated /stats endpoint.
+ */
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const [claimsData, appsData] = await Promise.all([
+    claimsAPI.list(1),
+    applicationsAPI.list(1, 100),
+  ]);
+
+  const approvedClaims = claimsData.items.filter(
+    (c) => c.status === "approved"
+  ).length;
+  const pendingReview = appsData.items.filter(
+    (a) => a.status === "under_review"
+  ).length;
+
+  return {
+    totalClaims: claimsData.total,
+    totalApplications: appsData.total,
+    approvedClaims,
+    pendingReview,
+  };
 }
