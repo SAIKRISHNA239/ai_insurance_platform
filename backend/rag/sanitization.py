@@ -59,9 +59,7 @@ from __future__ import annotations
 import abc
 import re
 import time
-import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple
 
 import structlog
@@ -456,7 +454,7 @@ class PresidioSanitizer(BaseSanitizer):
 
     def __init__(self) -> None:
         try:
-            from presidio_analyzer import AnalyzerEngine
+            from presidio_analyzer import AnalyzerEngine  # type: ignore
         except ImportError:
             raise ImportError(
                 "Install Presidio to use this backend: "
@@ -468,7 +466,6 @@ class PresidioSanitizer(BaseSanitizer):
     def _detect_entities(
         self, text: str
     ) -> Iterator[tuple[int, int, PHIEntityType, float, str]]:
-        from presidio_analyzer import AnalyzerEngine
         results = self._analyzer.analyze(text=text, language="en")
         for result in results:
             entity_type = self.PRESIDIO_ENTITY_MAP.get(

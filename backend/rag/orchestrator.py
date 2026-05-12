@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,7 @@ from typing import Any
 import structlog
 
 from backend.rag.chunking import ChunkingConfig, chunk_elements
-from backend.rag.ingestion import ingest_pdf, ingest_raw_text
+from backend.rag.ingestion import ingest_pdf
 from backend.rag.sanitization import sanitize_text_async
 from backend.rag.schemas import (
     DocumentChunk,

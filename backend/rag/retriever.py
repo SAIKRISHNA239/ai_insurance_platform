@@ -67,7 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -247,7 +247,6 @@ async def _expand_query_with_llm(
         )
     )
 
-    from backend.llm.client import get_llm_client
     import json
 
     llm = get_llm_client()

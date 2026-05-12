@@ -40,9 +40,8 @@ Architectural decisions:
 from __future__ import annotations
 
 import enum
-import uuid
-from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from datetime import date, datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -320,7 +319,7 @@ class ChunkMetadata(BaseModel):
 
     # ── Temporal ──────────────────────────────────────────────────────────
     ingested_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="UTC timestamp when this chunk was ingested into the vector store.",
     )
     document_effective_date: date | None = Field(
@@ -441,4 +440,4 @@ class IngestionResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
-    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

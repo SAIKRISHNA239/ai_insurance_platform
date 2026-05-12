@@ -42,25 +42,25 @@ async def seed():
 
         users = [
             User(
-                id=admin_id, email="admin@medintel.ai",
+                id=admin_id, tenant_id="medintel", email="admin@medintel.ai",
                 hashed_password=_hash("Admin1234!"),
                 full_name="Medical Director", role=UserRole.ADMIN,
                 is_active=True, is_verified=True,
             ),
             User(
-                id=uw_id, email="uw@medintel.ai",
+                id=uw_id, tenant_id="medintel", email="uw@medintel.ai",
                 hashed_password=_hash("Underwriter1!"),
                 full_name="Senior Underwriter", role=UserRole.UNDERWRITER,
                 is_active=True, is_verified=True,
             ),
             User(
-                id=insured1, email="eleanor@example.com",
+                id=insured1, tenant_id="medintel", email="eleanor@example.com",
                 hashed_password=_hash("Patient1234!"),
                 full_name="Eleanor Vance", role=UserRole.INSURED,
                 is_active=True, is_verified=True,
             ),
             User(
-                id=insured2, email="marcus@example.com",
+                id=insured2, tenant_id="medintel", email="marcus@example.com",
                 hashed_password=_hash("Patient1234!"),
                 full_name="Marcus Thorne", role=UserRole.INSURED,
                 is_active=True, is_verified=True,
@@ -75,7 +75,7 @@ async def seed():
         p2_id = uuid.uuid4()
         policies = [
             Policy(
-                id=p1_id, policy_number="POL-2023-001",
+                id=p1_id, tenant_id="medintel", policy_number="POL-2023-001",
                 holder_id=insured1, policy_type=PolicyType.INDIVIDUAL,
                 premium_amount=Decimal("850.00"),
                 coverage_limit=Decimal("500000"),
@@ -85,7 +85,7 @@ async def seed():
                 status=PolicyStatus.ACTIVE,
             ),
             Policy(
-                id=p2_id, policy_number="POL-2023-002",
+                id=p2_id, tenant_id="medintel", policy_number="POL-2023-002",
                 holder_id=insured2, policy_type=PolicyType.INDIVIDUAL,
                 premium_amount=Decimal("620.00"),
                 coverage_limit=Decimal("250000"),
@@ -102,7 +102,7 @@ async def seed():
         # ── Applications ─────────────────────────────────────────────────────
         apps = [
             Application(
-                id=uuid.uuid4(), application_number="APP-9024-X",
+                id=uuid.uuid4(), tenant_id="medintel", application_number="APP-9024-X",
                 applicant_id=insured1, policy_type=AppPolicyType.INDIVIDUAL,
                 requested_coverage_limit=Decimal("500000"),
                 status=ApplicationStatus.UNDER_REVIEW,
@@ -113,7 +113,7 @@ async def seed():
                 ),
             ),
             Application(
-                id=uuid.uuid4(), application_number="APP-8831-M",
+                id=uuid.uuid4(), tenant_id="medintel", application_number="APP-8831-M",
                 applicant_id=insured2, policy_type=AppPolicyType.INDIVIDUAL,
                 requested_coverage_limit=Decimal("250000"),
                 status=ApplicationStatus.APPROVED,
@@ -123,7 +123,7 @@ async def seed():
                 ),
             ),
             Application(
-                id=uuid.uuid4(), application_number="APP-7712-S",
+                id=uuid.uuid4(), tenant_id="medintel", application_number="APP-7712-S",
                 applicant_id=insured1, policy_type=AppPolicyType.GROUP,
                 requested_coverage_limit=Decimal("100000"),
                 status=ApplicationStatus.SUBMITTED,
@@ -131,7 +131,7 @@ async def seed():
                 ai_underwriting_notes=None,
             ),
             Application(
-                id=uuid.uuid4(), application_number="APP-6601-D",
+                id=uuid.uuid4(), tenant_id="medintel", application_number="APP-6601-D",
                 applicant_id=insured2, policy_type=AppPolicyType.INDIVIDUAL,
                 requested_coverage_limit=Decimal("1000000"),
                 status=ApplicationStatus.UNDER_REVIEW,
@@ -149,7 +149,7 @@ async def seed():
         # ── Claims ───────────────────────────────────────────────────────────
         claims = [
             Claim(
-                id=uuid.uuid4(), claim_number="CLM-2023-8901",
+                id=uuid.uuid4(), tenant_id="medintel", claim_number="CLM-2023-8901",
                 policy_id=p1_id, claimant_id=insured1,
                 status=ClaimStatus.IN_REVIEW,
                 billed_amount=Decimal("1245.00"),
@@ -162,7 +162,7 @@ async def seed():
                 ai_notes="Hypertension follow-up with lipid panel. Standard preventive care.",
             ),
             Claim(
-                id=uuid.uuid4(), claim_number="CLM-2023-8902",
+                id=uuid.uuid4(), tenant_id="medintel", claim_number="CLM-2023-8902",
                 policy_id=p2_id, claimant_id=insured2,
                 status=ClaimStatus.SUBMITTED,
                 billed_amount=Decimal("890.50"),
@@ -174,7 +174,7 @@ async def seed():
                 ai_notes="Type 2 Diabetes Mellitus management visit with HbA1c lab.",
             ),
             Claim(
-                id=uuid.uuid4(), claim_number="CLM-2023-8903",
+                id=uuid.uuid4(), tenant_id="medintel", claim_number="CLM-2023-8903",
                 policy_id=p1_id, claimant_id=insured1,
                 status=ClaimStatus.APPROVED,
                 billed_amount=Decimal("320.00"),
@@ -187,7 +187,7 @@ async def seed():
                 ai_notes="Acute bronchitis treatment. Approved.",
             ),
             Claim(
-                id=uuid.uuid4(), claim_number="CLM-2023-8904",
+                id=uuid.uuid4(), tenant_id="medintel", claim_number="CLM-2023-8904",
                 policy_id=p2_id, claimant_id=insured2,
                 status=ClaimStatus.DENIED,
                 billed_amount=Decimal("0.00"),

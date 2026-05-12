@@ -29,7 +29,7 @@ are preserved unchanged for compatibility with the existing API contract.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -50,7 +50,6 @@ from backend.claims.state_machine import (
 from backend.database.models import Claim, ClaimStatus, Policy, User, UserRole
 from backend.workflows.events import (
     KafkaPublishError,
-    UMRoutingDecision,
     process_validated_claim,
     publish_claim_validated,
 )
@@ -163,7 +162,7 @@ class ClaimSubmitRequest(BaseModel):
     billing_provider_npi: str | None = Field(None, max_length=10)
     service_date_start: date
     service_date_end: date | None = None
-    billed_amount: Decimal = Field(gt=0)
+    billed_amount: Decimal = Field(gt=Decimal("0"))
     diagnosis_codes: list[str] | None = None
     procedure_codes: list[dict[str, Any]] | None = None
     place_of_service: str | None = Field(None, max_length=5)
@@ -222,11 +221,11 @@ def _to_edi_payload(
                 procedure_code=l.procedure_code,
                 modifier=l.modifier,
                 units=l.units,
-                charge_amount=l.charge_amount,
-                place_of_service=l.place_of_service,
-                rendering_provider_npi=l.rendering_provider_npi,
+                charge_amount=ln.charge_amount,
+                place_of_service=ln.place_of_service,
+                rendering_provider_npi=ln.rendering_provider_npi,
             )
-            for l in body.procedure_lines
+            for ln in body.procedure_lines
         ],
         total_charge=body.total_charge,
         place_of_service=body.place_of_service,
@@ -235,7 +234,7 @@ def _to_edi_payload(
 
 def _generate_claim_number(icn: str) -> str:
     """Generate a deterministic claim number from the interchange control number."""
-    prefix = datetime.utcnow().strftime("%Y%m")
+    prefix = datetime.now(timezone.utc).strftime("%Y%m")
     suffix = icn[-8:].zfill(8)
     return f"CLM-{prefix}-{suffix}"
 
@@ -288,7 +287,6 @@ async def intake_claim(
     # ── 2. SNIP Validation ────────────────────────────────────────────────
     snip_result_dict: dict[str, Any] = {}
     snip_failed = False
-    snip_error_response: dict[str, Any] = {}
 
     try:
         snip_result = await validate_claim(edi_payload, claim_id)
@@ -310,13 +308,13 @@ async def intake_claim(
     # Map adjudication states to ORM ClaimStatus
     proc_codes_for_db = [
         {
-            "line": l.line_number,
-            "code": l.procedure_code,
-            "modifier": l.modifier,
-            "units": l.units,
-            "charge": str(l.charge_amount),
+            "line": ln.line_number,
+            "code": ln.procedure_code,
+            "modifier": ln.modifier,
+            "units": ln.units,
+            "charge": str(ln.charge_amount),
         }
-        for l in body.procedure_lines
+        for ln in body.procedure_lines
     ]
 
     claim = Claim(
@@ -324,6 +322,7 @@ async def intake_claim(
         claim_number=claim_number,
         policy_id=body.policy_id,
         claimant_id=current_user.id,
+        tenant_id=current_user.tenant_id,          # Multi-tenancy: inherited from JWT
         edi_transaction_set=body.transaction_set,
         edi_interchange_control_number=body.interchange_control_number,
         billing_provider_npi=body.billing_provider_npi,
@@ -335,6 +334,17 @@ async def intake_claim(
         procedure_codes=proc_codes_for_db,
         place_of_service=body.place_of_service,
         status=initial_status,
+        # raw_edi_payload: store serialized EDI payload as JSONB audit record.
+        # This is the immutable source-of-truth for re-adjudication and dispute
+        # resolution (Phase 1 design requirement for the raw_edi_payload column).
+        raw_edi_payload={
+            "transaction_set": body.transaction_set,
+            "interchange_control_number": body.interchange_control_number,
+            "billing_provider_npi": body.billing_provider_npi,
+            "total_charge": str(body.total_charge),
+            "procedure_line_count": len(body.procedure_lines),
+            "diagnosis_code_count": len(body.diagnosis_codes),
+        },
         ai_metadata={
             "adjudication_state": (
                 AdjudicationState.SNIP_REJECTED.value
@@ -402,17 +412,16 @@ async def intake_claim(
             msg="Claim persisted. Dead-letter retry will re-publish.",
         )
         # Write dead-letter marker into ai_metadata
+        # Guard: ai_metadata may be None if the column default hasn't fired yet.
+        existing_meta = claim.ai_metadata or {}
         claim.ai_metadata = {
-            **claim.ai_metadata,
+            **existing_meta,
             "kafka_publish_failed": True,
             "kafka_error": str(exc),
+            "kafka_failed_at": datetime.now(timezone.utc).isoformat(),
         }
 
     await db.commit()
-
-    # ── 6. UM routing as background task (non-blocking) ───────────────────
-    um_route: str | None = None
-    um_triggers: list[str] = []
 
     background_tasks.add_task(
         _background_um_routing, claim_id, edi_payload
@@ -438,7 +447,7 @@ async def intake_claim(
             "Claim accepted and published for adjudication. "
             "UM routing is processing asynchronously."
         ),
-        submitted_at=datetime.utcnow().isoformat(),
+        submitted_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -569,7 +578,7 @@ async def update_claim_status(
     if body.denial_reason:
         claim.denial_reason = body.denial_reason
     claim.adjudicated_by = current_user.id
-    claim.adjudicated_at = datetime.utcnow()
+    claim.adjudicated_at = datetime.now(timezone.utc)
     await db.flush()
     logger.info("claim_status_updated", claim_id=str(claim_id), status=body.status)
     return ClaimResponse.model_validate(claim)

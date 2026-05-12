@@ -78,8 +78,8 @@ import hashlib
 import json
 import struct
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -354,7 +354,7 @@ class SemanticCache:
                     retrieved_chunk_ids=entry_data.get("retrieved_chunk_ids", []),
                     hit_count=entry_data.get("hit_count", 0) + 1,
                     created_at=entry_data["created_at"],
-                    last_accessed_at=datetime.utcnow().isoformat(),
+                    last_accessed_at=datetime.now(timezone.utc).isoformat(),
                 )
 
                 # Update hit count and last_accessed_at asynchronously
@@ -453,7 +453,7 @@ class SemanticCache:
                 embedding = await self._embed_query(normalized)
 
             packed = _pack_embedding(embedding)
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
 
             entry_payload = {
                 "cache_key": cache_key,

@@ -83,9 +83,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-import uuid
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -353,7 +352,6 @@ def _apply_size_guardrails(
     buffer: list[str] = []
 
     for group in groups:
-        combined_text = " ".join(group)
         buffer.extend(group)
 
         if len(" ".join(buffer)) >= config.min_chars:
@@ -472,7 +470,7 @@ def _make_chunk(
         is_sanitized=True,  # Sanitization always runs before chunking
         phi_redaction_count=phi_redaction_count,
         allowed_roles=allowed_roles,
-        ingested_at=datetime.utcnow(),
+        ingested_at=datetime.now(timezone.utc),
         document_effective_date=document_effective_date,
         char_count=char_count,
         token_estimate=char_count // 4,

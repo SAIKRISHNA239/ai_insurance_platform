@@ -57,7 +57,7 @@ import asyncio
 import json
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -130,6 +130,11 @@ class ClaimValidatedEvent:
     The envelope follows CloudEvents 1.0 spec conventions (id, source, type,
     specversion) for interoperability with downstream consumers that may be
     implemented in other languages or services.
+
+    Note on `data` default:
+        dataclasses require mutable defaults to use field(default_factory=...).
+        We use a factory that returns an empty dict, and the caller always
+        supplies a populated dict — the factory only fires if data is omitted.
     """
     specversion: str = "1.0"
     id: str = ""
@@ -137,7 +142,7 @@ class ClaimValidatedEvent:
     type: str = "com.insurance.claims.validated"
     datacontenttype: str = "application/json"
     time: str = ""
-    data: dict[str, Any] = None  # type: ignore
+    data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -601,20 +606,27 @@ async def _invoke_rag_for_medical_necessity(
             f"Is this covered under the standard benefit plan?"
         )
 
-        # Import here to avoid circular dependency
-        from backend.rag.pipeline import run_rag_pipeline
-        result = await run_rag_pipeline(
+        # Import here to avoid circular dependency at module load time.
+        # run_rag_query is the Phase 3 pipeline entry point in backend/rag/pipeline.py.
+        from backend.rag.pipeline import run_rag_query
+        from backend.config import get_settings
+        settings = get_settings()
+
+        result = await run_rag_query(
             query=query,
-            collection_name="policy_vectors",
-            tenant_id="system",
+            collection_name=settings.chroma_collection_policies,
+            tenant_id="system",        # Internal system query — not user-scoped
             user_role="claims_adjuster",
+            expansion_backend="dictionary",  # Zero-latency; LLM expansion not needed here
+            final_top_k=3,                   # Compact context for UM advisory summary
+            use_cache=False,                 # Each claim is unique — cache offers no benefit
         )
         logger.info(
             "rag_medical_necessity_retrieved",
             claim_id=claim_id,
-            context_length=len(result.get("answer", "")),
+            context_length=len(result.answer),
         )
-        return result.get("answer", "")
+        return result.answer
     except Exception as exc:
         logger.warning(
             "rag_medical_necessity_failed",

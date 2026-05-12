@@ -1,17 +1,18 @@
 """
 backend/vectorstore/client.py
 ──────────────────────────────
-Core Vector Database client: RBAC-enforced Hybrid Search (dense + sparse BM25).
+Phase 3 Core Vector Database Client: RBAC-enforced Hybrid Search (dense + sparse
+BM25) with per-leg timing, health-check, and collection statistics.
 
 ARCHITECTURE DECISION: WHY HYBRID SEARCH IN HEALTHCARE RAG?
-─────────────────────────────────────────────────────────────
+─────────────────────────────────────────────────────────
 Dense-only retrieval fails on exact medical identifiers (CPT/ICD codes, policy
 section numbers). Sparse BM25 fails on semantic paraphrases. Hybrid Search
 runs BOTH legs concurrently and fuses via Reciprocal Rank Fusion (RRF) to
 capture both lexical and semantic relevance — critical for insurance adjudication.
 
 COMPLIANCE DECISION: PRE-RETRIEVAL RBAC AT THE VECTOR DB LAYER
-───────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────
 Security CANNOT be delegated to the LLM. The RBAC `where` filter derived from
 the JWT (tenant_id + role) is applied by ChromaDB BEFORE any vector scoring.
 Vectors failing the filter are invisible to the similarity engine — documents
@@ -23,6 +24,14 @@ BM25 IMPLEMENTATION NOTE
 ChromaDB has no native BM25. The sparse leg fetches RBAC-filtered documents
 and builds an in-memory BM25Okapi index. For >50K chunks/tenant, cache the
 index in Redis or replace the sparse leg with Elasticsearch.
+
+PER-LEG TIMING
+───────────────
+Because dense and sparse legs run concurrently via asyncio.gather(), measuring
+their individual wall-clock times requires wrapping each coroutine in a timing
+shell that records start/end before handing the result back to gather(). This
+provides accurate per-leg latency in HybridSearchResult for observability
+dashboards and SLO alerting.
 """
 
 from __future__ import annotations
@@ -317,20 +326,32 @@ async def hybrid_search(
 ) -> HybridSearchResult:
     """
     Execute concurrent dense (ANN) + sparse (BM25) hybrid search with
-    deterministic pre-retrieval RBAC filtering.
+    deterministic pre-retrieval RBAC filtering and accurate per-leg timing.
 
     Both search legs share the same RBAC filter — the same isolation guarantee
     applies regardless of whether a chunk is found via semantic or keyword match.
 
+    Per-leg timing strategy:
+      asyncio.gather() runs coroutines concurrently, so naive before/after
+      measurement of the gather() call gives total wall-clock time, not
+      individual leg times. We wrap each leg in a timing coroutine that
+      captures its own start/end, then stores the duration in a shared dict
+      BEFORE returning the result to gather(). This gives accurate individual
+      leg latencies without blocking parallelism.
+
     Args:
-        tenant_id:  JWT-derived tenant claim. NEVER accept from user input.
-        user_role:  JWT-derived role claim.
-        (other args): See dense_search() / sparse_search().
+        tenant_id:        JWT-derived tenant claim. NEVER accept from user input.
+        user_role:        JWT-derived role claim.
+        dense_top_k:      Candidates from the dense ANN leg.
+        sparse_top_k:     Candidates from the BM25 sparse leg.
+        document_types:   Optional scope filter by DocumentType.
+        require_sanitized: Only retrieve HIPAA-sanitized chunks (always True in prod).
 
     Returns:
-        HybridSearchResult passed to retriever.py for RRF fusion + reranking.
+        HybridSearchResult with per-leg timings, passed to retriever.py for
+        RRF fusion + cross-encoder re-ranking.
     """
-    start = time.perf_counter()
+    overall_start = time.perf_counter()
 
     rbac_filter = build_rbac_filter(
         tenant_id=tenant_id,
@@ -344,19 +365,42 @@ async def hybrid_search(
         collection=collection_name,
         tenant_id=tenant_id,
         user_role=user_role,
+        rbac_conditions=len(rbac_filter.get("$and", [rbac_filter])),
     )
+
+    # Per-leg timing containers — populated inside timing wrappers before
+    # the gather() call returns so both values are always set.
+    leg_timings: dict[str, float] = {"dense": 0.0, "sparse": 0.0}
+
+    async def _timed_dense() -> list[RetrievedChunk]:
+        t = time.perf_counter()
+        result = await dense_search(
+            collection_name, query_embedding, rbac_filter, dense_top_k
+        )
+        leg_timings["dense"] = (time.perf_counter() - t) * 1000
+        return result
+
+    async def _timed_sparse() -> list[RetrievedChunk]:
+        t = time.perf_counter()
+        result = await sparse_search(
+            collection_name, query_text, rbac_filter, sparse_top_k
+        )
+        leg_timings["sparse"] = (time.perf_counter() - t) * 1000
+        return result
 
     dense_results, sparse_results = await asyncio.gather(
-        dense_search(collection_name, query_embedding, rbac_filter, dense_top_k),
-        sparse_search(collection_name, query_text, rbac_filter, sparse_top_k),
+        _timed_dense(),
+        _timed_sparse(),
     )
 
-    total_ms = (time.perf_counter() - start) * 1000
+    total_ms = (time.perf_counter() - overall_start) * 1000
     logger.info(
         "hybrid_search_complete",
-        dense=len(dense_results),
-        sparse=len(sparse_results),
-        ms=f"{total_ms:.1f}",
+        dense_hits=len(dense_results),
+        sparse_hits=len(sparse_results),
+        dense_ms=f"{leg_timings['dense']:.1f}",
+        sparse_ms=f"{leg_timings['sparse']:.1f}",
+        total_ms=f"{total_ms:.1f}",
     )
 
     return HybridSearchResult(
@@ -366,16 +410,97 @@ async def hybrid_search(
         query_text=query_text,
         tenant_id=tenant_id,
         user_role=user_role,
-        dense_latency_ms=0.0,
-        sparse_latency_ms=0.0,
+        dense_latency_ms=leg_timings["dense"],
+        sparse_latency_ms=leg_timings["sparse"],
         total_latency_ms=total_ms,
         rbac_filter_applied=rbac_filter,
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Health Check & Collection Statistics
+# ───────────────────────────────────────────────────────────────────────────────
+
+async def health_check() -> dict[str, Any]:
+    """
+    Verify ChromaDB connectivity and return server metadata.
+
+    Called during FastAPI startup (lifespan handler) and by the
+    /health endpoint to confirm the vector database is reachable.
+    Raises on connection failure so the health endpoint can return 503.
+
+    Returns:
+        dict with keys: status, server_version, collections, latency_ms.
+    """
+    from backend.database.vector_client import get_chroma_client
+
+    start = time.perf_counter()
+    client = get_chroma_client()
+    try:
+        # heartbeat() returns a nanosecond timestamp — verifies HTTP reachability
+        await client.heartbeat()
+        collections = await client.list_collections()
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "chromadb_health_ok",
+            collections=len(collections),
+            latency_ms=f"{latency_ms:.1f}",
+        )
+        return {
+            "status": "ok",
+            "collection_count": len(collections),
+            "latency_ms": round(latency_ms, 2),
+        }
+    except Exception as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.error("chromadb_health_failed", error=str(exc), latency_ms=f"{latency_ms:.1f}")
+        raise RuntimeError(f"ChromaDB unreachable: {exc}") from exc
+
+
+async def get_collection_stats(
+    collection_name: str,
+    tenant_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Return document count and optional per-tenant count for a collection.
+
+    Used by the pipeline orchestrator and monitoring dashboards to observe
+    index growth over time. The optional tenant_id filter runs a ChromaDB
+    `get()` with a metadata where-clause to count only that tenant's docs.
+
+    Args:
+        collection_name: ChromaDB collection to inspect.
+        tenant_id:       If provided, count only this tenant's chunks.
+
+    Returns:
+        dict with keys: collection_name, total_count, tenant_count (if requested).
+    """
+    from backend.database.vector_client import get_or_create_collection
+
+    collection = await get_or_create_collection(collection_name)
+    total: int = await collection.count()
+
+    stats: dict[str, Any] = {
+        "collection_name": collection_name,
+        "total_count": total,
+    }
+
+    if tenant_id:
+        # Fetch only IDs (not documents) for minimal payload
+        tenant_docs = await collection.get(
+            where={"tenant_id": {"$eq": tenant_id}},
+            include=[],  # IDs only
+        )
+        stats["tenant_count"] = len(tenant_docs["ids"])
+        stats["tenant_id"] = tenant_id
+
+    logger.debug("collection_stats", **stats)
+    return stats
+
+
+# ───────────────────────────────────────────────────────────────────────────────
 # Upsert Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
 
 async def upsert_chunk(
     collection_name: str,

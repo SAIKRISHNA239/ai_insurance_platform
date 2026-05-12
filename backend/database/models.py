@@ -7,12 +7,45 @@ Schema design notes:
 • All PKs are server-generated UUIDs (gen_random_uuid()) for security and
   distributed-system compatibility.
 • Enum types are PostgreSQL native ENUMs for DB-level integrity.
-• JSONB columns (diagnosis_codes, procedure_codes, health_questionnaire)
-  allow flexible, schema-less document storage with full GIN index support.
+• JSONB columns (diagnosis_codes, procedure_codes, health_questionnaire,
+  raw_edi_payload) allow flexible, schema-less document storage with full
+  GIN index support.
 • Audit columns (created_at, updated_at) use server_default / onupdate so
   the DB enforces timestamps even for bulk inserts outside the ORM.
 • All relationships are lazy="selectin" for async safety — avoids implicit
   lazy-loading which is unsupported in async SQLAlchemy sessions.
+
+Multi-Tenancy Design
+─────────────────────
+• Every table carries a tenant_id: Mapped[str] column — a plain string that
+  holds the tenant's slug/UUID (e.g. "acme-insurance", "bluecross-west").
+• This is a SHARED DATABASE, SHARED SCHEMA multi-tenancy model: all tenant
+  data lives in the same PostgreSQL tables, isolated purely by tenant_id.
+  Rationale:
+    - Simpler operations: one migration touches all tenants simultaneously.
+    - Lower resource footprint vs. schema-per-tenant for 100s of tenants.
+    - Row-Level Security (RLS) policies in PostgreSQL can enforce tenant
+      isolation at the DB layer as a defence-in-depth measure.
+• Every API endpoint filters by the tenant_id extracted from the JWT token,
+  preventing cross-tenant data leakage at the application layer.
+• Composite indexes (tenant_id + status, tenant_id + holder_id, etc.) ensure
+  queries are selective without full-table scans when tenants share large tables.
+
+raw_edi_payload JSONB (Claim model)
+─────────────────────────────────────
+• Stores the complete, unmodified EDI 837 transaction or extracted health-data
+  payload as a JSONB blob.
+• Why JSONB instead of TEXT?
+    - Indexed: GIN index on raw_edi_payload enables JSON path queries
+      (e.g. find all claims where payload @> '{"loop_2000B": {"id": "NPI123"}}').
+    - Queryable: PostgreSQL JSONB operators (->>, @>, #>>) work natively.
+    - Typed: JSONB rejects malformed JSON at write time, preventing silent
+      corruption from upstream EDI parsers.
+    - Compressible: PostgreSQL uses TOAST compression on large JSONB values.
+• The structured EDI fields (billing_provider_npi, diagnosis_codes, etc.) are
+  still normalised into dedicated columns for efficient indexed queries;
+  raw_edi_payload serves as the source-of-truth archive for audit and
+  re-processing without re-fetching from the original EDI clearinghouse.
 """
 
 from __future__ import annotations
@@ -24,7 +57,6 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -124,6 +156,11 @@ class User(TimestampMixin, Base):
     """
     Platform user — represents every actor: admins, underwriters,
     claims adjusters, and insured members.
+
+    Multi-tenancy:
+        tenant_id identifies which insurance organisation this user belongs to.
+        It is extracted from the authenticated JWT on every request and used
+        to scope all database queries, preventing cross-tenant data access.
     """
     __tablename__ = "users"
 
@@ -131,6 +168,17 @@ class User(TimestampMixin, Base):
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
+    )
+    # ── Multi-tenancy ──────────────────────────────────────────────────────
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        comment=(
+            "Tenant slug/UUID — primary isolation boundary. "
+            "All application-layer queries MUST filter by this column. "
+            "Example: 'acme-insurance', 'bluecross-west'."
+        ),
     )
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -167,11 +215,14 @@ class User(TimestampMixin, Base):
 
     # ── Composite indexes ─────────────────────────────────────────────────
     __table_args__ = (
+        # Fast lookup of all active users in a tenant (common auth path)
+        Index("ix_users_tenant_email", "tenant_id", "email"),
+        Index("ix_users_tenant_active", "tenant_id", "is_active"),
         Index("ix_users_email_active", "email", "is_active"),
     )
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} email={self.email} role={self.role}>"
+        return f"<User id={self.id} tenant={self.tenant_id} email={self.email} role={self.role}>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +233,11 @@ class Policy(TimestampMixin, Base):
     """
     Insurance policy held by a User (insured member).
     A policy is the contract that backs individual claims.
+
+    Multi-tenancy:
+        tenant_id is denormalized onto Policy (even though it is reachable via
+        holder.tenant_id) to allow efficient single-table queries without joins.
+        This is a standard denormalisation tradeoff for high-traffic read paths.
     """
     __tablename__ = "policies"
 
@@ -189,6 +245,13 @@ class Policy(TimestampMixin, Base):
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
+    )
+    # ── Multi-tenancy ──────────────────────────────────────────────────────
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        comment="Tenant identifier — mirrors holder.tenant_id for join-free filtering.",
     )
     policy_number: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True,
@@ -243,12 +306,15 @@ class Policy(TimestampMixin, Base):
     )
 
     __table_args__ = (
+        # Primary multi-tenant query patterns
+        Index("ix_policies_tenant_status", "tenant_id", "status"),
+        Index("ix_policies_tenant_holder", "tenant_id", "holder_id"),
         Index("ix_policies_holder_status", "holder_id", "status"),
         Index("ix_policies_effective_expiry", "effective_date", "expiry_date"),
     )
 
     def __repr__(self) -> str:
-        return f"<Policy id={self.id} number={self.policy_number} status={self.status}>"
+        return f"<Policy id={self.id} tenant={self.tenant_id} number={self.policy_number} status={self.status}>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,8 +326,30 @@ class Claim(TimestampMixin, Base):
     Healthcare insurance claim.
 
     EDI 837 (Professional/Institutional) key fields are captured as dedicated
-    columns for structured queries and reporting.  Full raw EDI payload and
-    AI inference results are stored as JSONB.
+    columns for structured queries and reporting. The complete raw EDI payload
+    and AI inference results are stored as JSONB.
+
+    Multi-tenancy:
+        tenant_id is denormalized here (also reachable via policy.tenant_id)
+        to support efficient single-table fraud queries and analytics across
+        all claims for a tenant without additional joins.
+
+    raw_edi_payload JSONB:
+        Stores the complete, unparsed EDI 837 transaction or extracted health-
+        data document as a structured JSON object. This serves as the immutable
+        audit record of what was received from the clearinghouse or payer.
+
+        Key use cases:
+          • Re-adjudication: re-parse the original payload if business rules change.
+          • Dispute resolution: provide the exact received data to the payer.
+          • ML feature extraction: downstream pipelines can query JSONB fields
+            directly (e.g., loop segments, CLM, SV1) without re-parsing EDI text.
+          • Schema evolution: new EDI fields can be stored without a migration.
+
+        GIN index enables fast JSON containment queries:
+            SELECT * FROM claims
+            WHERE raw_edi_payload @> '{"loop_2300": {"CLM01": "CLAIM-007"}}'
+            AND tenant_id = 'acme-insurance';
     """
     __tablename__ = "claims"
 
@@ -269,6 +357,13 @@ class Claim(TimestampMixin, Base):
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
+    )
+    # ── Multi-tenancy ──────────────────────────────────────────────────────
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        comment="Tenant identifier — enables efficient per-tenant claim analytics.",
     )
     claim_number: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True,
@@ -284,6 +379,21 @@ class Claim(TimestampMixin, Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
+    )
+
+    # ── Raw EDI / Health Data Payload ──────────────────────────────────────
+    # JSONB over TEXT: enables GIN-indexed JSON containment queries, rejects
+    # malformed JSON at write time, and compresses efficiently via TOAST.
+    # This is the immutable source-of-truth archive of the received payload.
+    raw_edi_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "Complete raw EDI 837 transaction or extracted health-data document "
+            "stored as JSONB. Immutable after first write — serves as the "
+            "audit-grade source of truth for re-adjudication and dispute resolution. "
+            "GIN-indexed for JSON path and containment queries."
+        ),
     )
 
     # ── EDI 837 Structured Fields ──────────────────────────────────────────
@@ -378,10 +488,18 @@ class Claim(TimestampMixin, Base):
     )
 
     __table_args__ = (
+        # Primary multi-tenant query patterns
+        Index("ix_claims_tenant_status", "tenant_id", "status"),
+        Index("ix_claims_tenant_service_date", "tenant_id", "service_date_start"),
         Index("ix_claims_policy_status", "policy_id", "status"),
         Index("ix_claims_claimant_status", "claimant_id", "status"),
         Index("ix_claims_service_date", "service_date_start"),
-        # GIN index for fast JSONB queries on diagnosis/procedure codes
+        # GIN indexes for fast JSONB queries — critical for EDI payload search
+        Index(
+            "ix_claims_raw_edi_payload_gin",
+            "raw_edi_payload",
+            postgresql_using="gin",
+        ),
         Index(
             "ix_claims_diagnosis_codes_gin",
             "diagnosis_codes",
@@ -395,7 +513,7 @@ class Claim(TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Claim id={self.id} number={self.claim_number} status={self.status}>"
+        return f"<Claim id={self.id} tenant={self.tenant_id} number={self.claim_number} status={self.status}>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,6 +524,12 @@ class Application(TimestampMixin, Base):
     """
     Insurance application submitted by a prospective member.
     Drives the AI underwriting workflow to produce a risk decision.
+
+    Multi-tenancy:
+        tenant_id scopes all underwriting pipeline queries, ensuring one
+        tenant's risk models and decision thresholds cannot influence another's.
+        Particularly important for configurable underwriting guidelines that
+        vary by state or regulatory region.
     """
     __tablename__ = "applications"
 
@@ -413,6 +537,13 @@ class Application(TimestampMixin, Base):
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
+    )
+    # ── Multi-tenancy ──────────────────────────────────────────────────────
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        comment="Tenant identifier — scopes all underwriting pipeline queries.",
     )
     application_number: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True,
@@ -481,6 +612,9 @@ class Application(TimestampMixin, Base):
     )
 
     __table_args__ = (
+        # Primary multi-tenant query patterns
+        Index("ix_applications_tenant_status", "tenant_id", "status"),
+        Index("ix_applications_tenant_risk_tier", "tenant_id", "risk_tier"),
         Index("ix_applications_applicant_status", "applicant_id", "status"),
         Index("ix_applications_risk_tier", "risk_tier"),
         Index(
@@ -491,4 +625,4 @@ class Application(TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Application id={self.id} number={self.application_number} status={self.status}>"
+        return f"<Application id={self.id} tenant={self.tenant_id} number={self.application_number} status={self.status}>"

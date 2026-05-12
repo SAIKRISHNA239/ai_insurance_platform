@@ -65,7 +65,6 @@ run concurrently via `asyncio.gather()`.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import time
 from pathlib import Path
 from typing import Any
