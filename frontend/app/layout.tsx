@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Inter, Outfit } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/AuthContext';
 import AuthShell from '@/components/layout/AuthShell';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
+const outfit = Outfit({ subsets: ['latin'], variable: '--font-outfit' });
 
 export const metadata: Metadata = {
   title: 'MedIntelligence — Enterprise Analytics',
@@ -24,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body className={`${inter.variable} font-sans bg-background text-on-background`}>
+      <body className={`${inter.variable} ${outfit.variable} font-sans bg-background text-on-background mesh-gradient-bg min-h-screen`}>
         <AuthProvider>
           <AuthShell>
             {children}

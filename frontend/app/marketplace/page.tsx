@@ -1,59 +1,49 @@
+'use client';
+
 // app/marketplace/page.tsx — Insurance Marketplace & Discovery
 
-const POLICIES = [
-  {
-    name: 'Care Elite',
-    badge: 'Comprehensive',
-    badgeClass: 'bg-secondary-container/20 text-secondary border-secondary/30',
-    badgeDot: 'bg-secondary',
-    price: '$850',
-    priceColor: 'text-primary',
-    features: ['Full catastrophic risk coverage', 'No deductible for chronic care', 'Premium network access'],
-    checkColor: 'text-secondary',
-    featured: false,
-  },
-  {
-    name: 'Health Max',
-    badge: 'AI Recommended',
-    badgeClass: 'bg-primary-container/20 text-primary border-primary/30',
-    badgeDot: null,
-    badgeIcon: 'auto_awesome',
-    price: '$620',
-    priceColor: 'text-primary',
-    features: ['Optimized for chronic conditions (Asthma)', 'High-tier pharmacy benefits', 'Telehealth specialist network'],
-    checkColor: 'text-primary',
-    featured: true,
-  },
-  {
-    name: 'Base Shield',
-    badge: 'Essential',
-    badgeClass: 'bg-surface-variant text-on-surface-variant border-outline-variant',
-    badgeDot: null,
-    price: '$340',
-    priceColor: 'text-on-surface-variant',
-    features: ['Standard preventive care', 'High deductible model', 'Local network only'],
-    checkColor: 'text-outline',
-    featured: false,
-  },
-];
+import { useEffect, useState, useRef } from 'react';
+import { marketplaceAPI, type MarketplacePlan } from '@/lib/api';
 
 export default function MarketplacePage() {
+  const [policies, setPolicies] = useState<MarketplacePlan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [chatInput, setChatInput] = useState('');
+  
+  // Chat auto-scroll
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Fetch simulated dynamic data
+    setLoading(true);
+    marketplaceAPI.listPlans()
+      .then(setPolicies)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
-    <div className="h-full overflow-hidden">
-      <main className="h-full flex flex-col lg:flex-row gap-4 p-8 overflow-hidden bg-surface-container-lowest">
+    <div className="h-full overflow-hidden relative">
+      {/* Mesh background effect is applied globally in layout, but we can add floating shapes here */}
+      <div className="absolute top-[10%] left-[20%] w-[400px] h-[400px] bg-primary/10 rounded-full blur-[120px] mix-blend-screen pointer-events-none animate-float" />
+      <div className="absolute bottom-[10%] right-[10%] w-[500px] h-[500px] bg-secondary/10 rounded-full blur-[150px] mix-blend-screen pointer-events-none animate-float" style={{ animationDelay: '2s' }} />
+
+      <main className="relative h-full flex flex-col lg:flex-row gap-6 p-8 overflow-hidden z-10">
 
         {/* ── Left: Policy Grid ────────────────────────────────────────── */}
-        <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-2">
-          <div className="flex items-center justify-between">
+        <div className="flex-1 flex flex-col gap-6 overflow-y-auto pr-2 no-scrollbar">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
             <div>
-              <h2 className="font-headline-lg text-headline-lg text-on-surface">Available Policies</h2>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
-                Discover and compare enterprise-grade risk mitigation plans.
+              <h2 className="font-display text-[40px] text-on-surface leading-tight tracking-tight drop-shadow-md">
+                Available Policies
+              </h2>
+              <p className="font-body-lg text-on-surface-variant mt-2 max-w-xl">
+                Discover and compare enterprise-grade risk mitigation plans powered by advanced underwriting intelligence.
               </p>
             </div>
             <div className="flex gap-2">
               {['filter_list', 'sort'].map((icon, i) => (
-                <button key={icon} className="px-3 py-1.5 rounded border border-outline-variant flex items-center gap-2 font-body-sm text-body-sm hover:bg-surface-variant transition-colors text-on-surface">
+                <button key={icon} className="px-4 py-2 rounded-lg glass-panel flex items-center gap-2 font-body-sm hover:bg-surface-variant/50 transition-all text-on-surface hover:scale-105 active:scale-95">
                   <span className="material-symbols-outlined text-[18px]">{icon}</span>
                   {['Filter', 'Sort'][i]}
                 </button>
@@ -61,119 +51,159 @@ export default function MarketplacePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {POLICIES.map((policy) => (
-              <div
-                key={policy.name}
-                className={`bg-surface-container-low rounded-xl p-5 flex flex-col relative overflow-hidden ${
-                  policy.featured
-                    ? 'border border-primary/50 shadow-[0_0_15px_rgba(77,142,255,0.05)]'
-                    : 'border border-outline-variant'
-                }`}
-              >
-                {policy.featured && (
-                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-secondary" />
-                )}
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h3 className="font-headline-md text-headline-md text-on-surface">{policy.name}</h3>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full border font-label-caps text-label-caps mt-2 ${policy.badgeClass}`}>
-                      {policy.badgeIcon && <span className="material-symbols-outlined text-[12px] mr-1">{policy.badgeIcon}</span>}
-                      {policy.badgeDot && <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${policy.badgeDot}`} />}
-                      {policy.badge}
-                    </span>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mt-4">
+            {loading ? (
+              // Loading Skeletons
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={`skel-${i}`} className="glass-card rounded-2xl p-6 flex flex-col min-h-[280px]">
+                  <div className="flex justify-between items-start mb-6">
+                    <div className="space-y-3">
+                      <div className="w-40 h-8 bg-surface-variant/40 rounded-lg animate-pulse" />
+                      <div className="w-24 h-5 bg-surface-variant/40 rounded-full animate-pulse" />
+                    </div>
+                    <div className="w-20 h-10 bg-surface-variant/40 rounded-lg animate-pulse" />
                   </div>
-                  <div className="text-right">
-                    <div className={`font-display text-display ${policy.priceColor}`}>{policy.price}</div>
-                    <div className="font-body-sm text-body-sm text-on-surface-variant">/mo per member</div>
+                  <div className="space-y-3 mt-auto">
+                    <div className="w-full h-4 bg-surface-variant/40 rounded animate-pulse" />
+                    <div className="w-5/6 h-4 bg-surface-variant/40 rounded animate-pulse" />
+                    <div className="w-4/6 h-4 bg-surface-variant/40 rounded animate-pulse" />
                   </div>
                 </div>
-                <div className="border-t border-outline-variant pt-4 flex-1">
-                  <ul className="flex flex-col gap-2 font-body-sm text-body-sm text-on-surface-variant">
-                    {policy.features.map((f) => (
-                      <li key={f} className="flex items-start gap-2">
-                        <span className={`material-symbols-outlined text-[18px] ${policy.checkColor}`}>check_circle</span>
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
+              ))
+            ) : (
+              // Dynamic Policies
+              policies.map((policy) => (
+                <div
+                  key={policy.id}
+                  className={`glass-card rounded-2xl p-6 flex flex-col relative overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl ${
+                    policy.featured
+                      ? 'border-primary/40 shadow-[0_8px_32px_rgba(77,142,255,0.15)] ring-1 ring-primary/20'
+                      : 'border-white/5 hover:border-white/10'
+                  }`}
+                >
+                  {policy.featured && (
+                    <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-primary via-secondary to-primary bg-[length:200%_auto] animate-[gradient_3s_linear_infinite]" />
+                  )}
+                  
+                  <div className="flex justify-between items-start mb-6">
+                    <div>
+                      <h3 className="font-headline-lg text-on-surface tracking-tight">{policy.name}</h3>
+                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full border font-label-caps mt-3 backdrop-blur-md ${policy.badgeClass}`}>
+                        {policy.badgeIcon && <span className="material-symbols-outlined text-[12px] mr-1.5">{policy.badgeIcon}</span>}
+                        {policy.badgeDot && <span className={`w-1.5 h-1.5 rounded-full mr-1.5 shadow-[0_0_8px_currentColor] ${policy.badgeDot}`} />}
+                        {policy.badge}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <div className={`font-display text-[32px] ${policy.priceColor} drop-shadow-sm`}>{policy.price}</div>
+                      <div className="font-body-sm text-on-surface-variant opacity-80">/mo per member</div>
+                    </div>
+                  </div>
+                  
+                  <div className="pt-5 border-t border-white/5 flex-1 mt-2">
+                    <ul className="flex flex-col gap-3 font-body-sm text-on-surface-variant">
+                      {policy.features.map((f, idx) => (
+                        <li key={idx} className="flex items-start gap-3">
+                          <div className={`mt-0.5 rounded-full bg-surface/50 p-0.5 ${policy.checkColor}`}>
+                            <span className="material-symbols-outlined text-[14px]">check</span>
+                          </div>
+                          <span className="leading-relaxed">{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  
+                  <div className="mt-8 flex gap-3">
+                    <button className={`flex-1 font-body-sm font-semibold py-3 rounded-xl transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98] ${
+                      policy.featured 
+                        ? 'bg-primary text-on-primary shadow-[0_4px_20px_rgba(77,142,255,0.3)] hover:shadow-[0_4px_25px_rgba(77,142,255,0.4)] hover:bg-primary-container' 
+                        : 'glass-panel text-on-surface hover:bg-white/5'
+                    }`}>
+                      View Details
+                    </button>
+                    <button className="px-5 glass-panel text-on-surface font-body-sm font-medium rounded-xl transition-all hover:bg-white/5 hover:text-primary">
+                      Compare
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-6 flex gap-3">
-                  <button className={`flex-1 font-body-sm text-body-sm font-medium py-2 rounded hover:opacity-90 transition-colors ${policy.featured ? 'bg-primary text-on-primary' : 'border border-outline-variant text-on-surface hover:bg-surface-variant'}`}>
-                    View Details
-                  </button>
-                  <button className="px-4 border border-outline-variant text-on-surface font-body-sm text-body-sm font-medium rounded hover:bg-surface-variant transition-colors">
-                    Compare
-                  </button>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
         {/* ── Right: AI Chat Assistant ─────────────────────────────────── */}
-        <aside className="w-full lg:w-96 shrink-0 bg-surface-container-low border border-outline-variant rounded-xl overflow-hidden flex flex-col h-full lg:h-auto lg:max-h-full">
+        <aside className="w-full lg:w-[400px] shrink-0 glass-panel rounded-2xl overflow-hidden flex flex-col h-full lg:h-auto lg:max-h-full border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
           {/* Chat header */}
-          <div className="bg-surface-container-high px-4 py-3 flex items-center justify-between border-b border-outline-variant shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary">psychology</span>
-              <h3 className="font-headline-md text-headline-md text-on-surface text-[16px]">Intelligence Assistant</h3>
+          <div className="px-5 py-4 flex items-center justify-between border-b border-white/5 bg-white/[0.02] shrink-0 backdrop-blur-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center">
+                <span className="material-symbols-outlined text-primary text-[18px]">psychology</span>
+              </div>
+              <h3 className="font-headline-md text-on-surface text-[16px] tracking-wide">Intelligence Assistant</h3>
             </div>
-            <button className="text-on-surface-variant hover:text-on-surface transition-colors">
+            <button className="text-on-surface-variant hover:text-primary transition-colors p-1 rounded-full hover:bg-white/5">
               <span className="material-symbols-outlined text-[20px]">more_horiz</span>
             </button>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-surface-container-lowest">
-            <div className="text-center">
-              <span className="font-label-caps text-label-caps text-on-surface-variant border border-outline-variant rounded-full px-3 py-1 bg-surface-container">
+          <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-5 flex flex-col gap-5 relative bg-gradient-to-b from-transparent to-black/20">
+            <div className="text-center sticky top-0 z-10">
+              <span className="font-label-caps text-on-surface-variant border border-white/10 rounded-full px-4 py-1.5 glass-panel shadow-lg backdrop-blur-md">
                 Session connected to Underwriting DB
               </span>
             </div>
 
             {/* User */}
-            <div className="flex flex-col items-end gap-1 mt-2">
-              <div className="bg-surface-variant text-on-surface px-4 py-2.5 rounded-2xl rounded-tr-sm max-w-[85%] font-body-sm text-body-sm">
+            <div className="flex flex-col items-end gap-1 mt-4 animate-in slide-in-from-bottom-2">
+              <div className="bg-surface-variant/60 backdrop-blur-md text-on-surface px-5 py-3 rounded-2xl rounded-tr-sm max-w-[85%] font-body-sm leading-relaxed border border-white/5 shadow-md">
                 I&apos;m looking for the best policy for a 45-year-old smoker with a history of asthma.
               </div>
-              <span className="font-label-caps text-label-caps text-on-surface-variant text-[9px]">10:42 AM</span>
+              <span className="font-label-caps text-on-surface-variant text-[9px] opacity-70 mt-1">10:42 AM</span>
             </div>
 
             {/* AI */}
-            <div className="flex flex-col items-start gap-1">
-              <div className="flex items-end gap-2 max-w-[90%]">
-                <div className="w-6 h-6 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center shrink-0 mb-1">
+            <div className="flex flex-col items-start gap-1 animate-in slide-in-from-bottom-2" style={{ animationDelay: '150ms' }}>
+              <div className="flex items-end gap-3 max-w-[95%]">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 border border-primary/40 flex items-center justify-center shrink-0 mb-1 shadow-[0_0_15px_rgba(77,142,255,0.15)]">
                   <span className="material-symbols-outlined text-primary text-[14px]">auto_awesome</span>
                 </div>
-                <div className="bg-surface-container-high border border-outline-variant text-on-surface px-4 py-3 rounded-2xl rounded-tl-sm font-body-sm text-body-sm">
-                  Based on your criteria, <strong className="text-primary font-semibold">&apos;Health Max&apos;</strong> offers the best asthma-specific coverage at a competitive premium.
+                <div className="glass-card border-white/10 text-on-surface px-5 py-4 rounded-2xl rounded-tl-sm font-body-sm leading-relaxed shadow-lg">
+                  Based on your criteria, <strong className="text-primary font-semibold drop-shadow-[0_0_8px_rgba(77,142,255,0.5)]">&apos;Health Max&apos;</strong> offers the best asthma-specific coverage at a competitive premium.
                   <br /><br />
                   It includes high-tier pharmacy benefits for inhalers and specialized pulmonologist network access.
                 </div>
               </div>
-              <span className="font-label-caps text-label-caps text-on-surface-variant text-[9px] ml-8">10:43 AM</span>
+              <span className="font-label-caps text-on-surface-variant text-[9px] opacity-70 ml-10 mt-1">10:43 AM</span>
             </div>
           </div>
 
           {/* Input area */}
-          <div className="bg-surface-container-high border-t border-outline-variant p-3 flex flex-col gap-3 shrink-0">
-            <div className="flex gap-2 overflow-x-auto no-scrollbar">
-              <button className="whitespace-nowrap font-label-caps text-label-caps text-secondary border border-secondary/30 bg-secondary/10 px-3 py-1.5 rounded-full hover:bg-secondary/20 transition-colors">
+          <div className="glass-panel border-t border-white/5 p-4 flex flex-col gap-4 shrink-0 bg-black/40">
+            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+              <button className="whitespace-nowrap font-label-caps text-secondary border border-secondary/30 bg-secondary/10 px-4 py-2 rounded-full hover:bg-secondary/20 hover:scale-105 transition-all shadow-sm">
                 Compare Health Max vs Care Elite
               </button>
-              <button className="whitespace-nowrap font-label-caps text-label-caps text-on-surface-variant border border-outline-variant bg-surface px-3 py-1.5 rounded-full hover:bg-surface-variant transition-colors">
+              <button className="whitespace-nowrap font-label-caps text-on-surface-variant border border-white/10 bg-white/5 px-4 py-2 rounded-full hover:bg-white/10 hover:text-on-surface hover:scale-105 transition-all shadow-sm">
                 View formulary list
               </button>
             </div>
-            <div className="relative flex items-center">
+            <div className="relative flex items-center group">
               <input
                 type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Ask a follow-up question..."
-                className="w-full bg-surface border border-outline-variant rounded-lg pl-3 pr-10 py-2 font-body-sm text-body-sm focus:ring-1 focus:ring-primary focus:border-primary focus:outline-none transition-all placeholder:text-on-surface-variant text-on-surface"
+                className="w-full bg-surface/50 backdrop-blur-md border border-white/10 rounded-xl pl-4 pr-12 py-3 font-body-sm focus:ring-2 focus:ring-primary/50 focus:border-primary/50 focus:bg-surface/80 transition-all placeholder:text-on-surface-variant/50 text-on-surface shadow-inner"
               />
-              <button className="absolute right-2 text-primary hover:opacity-80 p-1">
-                <span className="material-symbols-outlined text-[20px]" style={{ fontVariationSettings: "'FILL' 1" }}>send</span>
+              <button 
+                className={`absolute right-2 p-2 rounded-lg transition-all flex items-center justify-center ${
+                  chatInput.trim().length > 0 
+                    ? 'bg-primary text-on-primary shadow-[0_0_15px_rgba(77,142,255,0.4)] scale-100' 
+                    : 'text-on-surface-variant hover:text-primary hover:bg-white/5 scale-95'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 1" }}>send</span>
               </button>
             </div>
           </div>

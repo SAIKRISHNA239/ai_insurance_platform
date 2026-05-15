@@ -13,7 +13,7 @@ Endpoints:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -42,7 +42,7 @@ router = APIRouter(prefix="/applications", tags=["Applications (Underwriting)"])
 class ApplicationSubmitRequest(BaseModel):
     application_number: str = Field(max_length=64)
     policy_type: PolicyType
-    requested_coverage_limit: Decimal = Field(gt=0)
+    requested_coverage_limit: Decimal = Field(gt=Decimal("0"))
     health_questionnaire: dict[str, Any] | None = None
 
 
@@ -110,6 +110,7 @@ async def submit_application(
     app = Application(
         application_number=body.application_number,
         applicant_id=current_user.id,
+        tenant_id=current_user.tenant_id,
         policy_type=body.policy_type,
         requested_coverage_limit=body.requested_coverage_limit,
         health_questionnaire=body.health_questionnaire,
@@ -138,7 +139,7 @@ async def list_applications(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PaginatedApplicationsResponse:
-    stmt = select(Application)
+    stmt = select(Application).where(Application.tenant_id == current_user.tenant_id)
 
     if current_user.role == UserRole.INSURED:
         stmt = stmt.where(Application.applicant_id == current_user.id)
@@ -166,7 +167,12 @@ async def get_application(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ApplicationResponse:
-    result = await db.execute(select(Application).where(Application.id == app_id))
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == current_user.tenant_id
+        )
+    )
     app = result.scalar_one_or_none()
 
     if app is None:
@@ -190,7 +196,12 @@ async def underwrite_application(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ApplicationResponse:
-    result = await db.execute(select(Application).where(Application.id == app_id))
+    result = await db.execute(
+        select(Application).where(
+            Application.id == app_id,
+            Application.tenant_id == current_user.tenant_id
+        )
+    )
     app = result.scalar_one_or_none()
 
     if app is None:
@@ -209,7 +220,7 @@ async def underwrite_application(
     app.ai_underwriting_notes = body.ai_underwriting_notes
     app.decision_notes = body.decision_notes
     app.reviewed_by = current_user.id
-    app.reviewed_at = datetime.utcnow()
+    app.reviewed_at = datetime.now(timezone.utc)
 
     await db.flush()
     logger.info(

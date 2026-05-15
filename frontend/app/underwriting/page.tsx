@@ -103,10 +103,10 @@ function ApplicationRow({ app, isSelected, onClick }: ApplicationRowProps) {
     <button
       onClick={onClick}
       className={`
-        w-full text-left px-3 py-3 rounded-lg border transition-all group
+        w-full text-left px-4 py-3 rounded-xl border transition-all duration-300 group
         ${isSelected
-          ? 'bg-secondary/10 border-secondary/30 shadow-sm shadow-secondary/10'
-          : 'bg-surface-container border-outline-variant hover:bg-surface-container-high hover:border-outline'}
+          ? 'glass-panel border-secondary/40 shadow-[0_0_16px_rgba(40,167,69,0.15)] bg-secondary/5'
+          : 'glass-card hover:bg-white/5 border-transparent hover:border-white/10'}
       `}
     >
       <div className="flex items-start justify-between gap-2">
@@ -189,11 +189,14 @@ export default function UnderwritingPage() {
   }, [selectedApp]);
 
   return (
-    <div className="h-full flex overflow-hidden bg-background">
+    <div className="h-full flex overflow-hidden relative">
+      {/* Mesh floating backgrounds */}
+      <div className="absolute top-[5%] left-[5%] w-[500px] h-[500px] bg-primary/10 rounded-full blur-[120px] mix-blend-screen pointer-events-none animate-float" />
+      <div className="absolute bottom-[20%] right-[10%] w-[400px] h-[400px] bg-secondary/10 rounded-full blur-[100px] mix-blend-screen pointer-events-none animate-float" style={{ animationDelay: '3s' }} />
 
       {/* ── Application Queue Sidebar ──────────────────────────────────── */}
-      <aside className="w-64 shrink-0 border-r border-outline-variant bg-surface-container-low flex flex-col">
-        <div className="px-4 pt-4 pb-3 border-b border-outline-variant">
+      <aside className="w-72 shrink-0 border-r border-white/10 glass-panel flex flex-col z-10 relative shadow-xl">
+        <div className="px-5 pt-5 pb-4 border-b border-white/5 bg-black/20">
           <h2 className="font-label-caps text-label-caps text-on-surface uppercase tracking-widest">Review Queue</h2>
           <p className="font-label-caps text-label-caps text-on-surface-variant mt-0.5">
             {applications.length} applications
@@ -219,14 +222,14 @@ export default function UnderwritingPage() {
       </aside>
 
       {/* ── Main Workspace ────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10 backdrop-blur-sm">
 
         {/* Application sub-header */}
         {selectedApp && (
-          <div className="shrink-0 flex items-center justify-between px-6 py-3 border-b border-outline-variant bg-surface-container-lowest">
+          <div className="shrink-0 flex items-center justify-between px-8 py-4 border-b border-white/10 bg-white/[0.02]">
             <div>
-              <h1 className="font-headline-md text-headline-md text-on-surface">{selectedApp.application_number}</h1>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
+              <h1 className="font-display text-[28px] text-on-surface drop-shadow-sm">{selectedApp.application_number}</h1>
+              <p className="font-data-mono text-on-surface-variant mt-1">
                 {selectedApp.policy_type} · submitted {new Date(selectedApp.created_at).toLocaleDateString()}
               </p>
             </div>
@@ -243,7 +246,7 @@ export default function UnderwritingPage() {
           {selectedApp ? (
             <>
               {/* Left: GenAI assistant panel */}
-              <section className="w-1/2 flex flex-col border-r border-outline-variant bg-surface min-w-[380px] overflow-hidden">
+              <section className="w-1/2 flex flex-col border-r border-white/10 glass-card min-w-[420px] overflow-hidden">
                 <GenAIAssistant
                   applicationId={selectedApp.id}
                   application={selectedApp}
@@ -252,22 +255,22 @@ export default function UnderwritingPage() {
                 />
 
                 {/* Decision action bar — always visible when app selected */}
-                <div className="shrink-0 px-6 py-4 border-t border-outline-variant bg-surface-container-lowest flex gap-3">
+                <div className="shrink-0 px-6 py-5 border-t border-white/10 bg-black/20 flex gap-4 backdrop-blur-md">
                   <button
                     onClick={() => handleAction('approve')}
-                    className="flex-1 bg-primary/20 border border-primary/40 text-primary font-body-sm text-body-sm font-semibold py-2.5 px-4 rounded-lg hover:bg-primary hover:text-on-primary transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-surface-container-lowest"
+                    className="flex-1 bg-primary/20 border border-primary/40 text-primary font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-primary hover:text-on-primary hover:shadow-[0_0_16px_rgba(77,142,255,0.4)] transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-black"
                   >
                     Approve &amp; Issue
                   </button>
                   <button
                     onClick={() => handleAction('decline')}
-                    className="flex-1 bg-error-container/20 border border-error-container/40 text-error font-body-sm text-body-sm font-semibold py-2.5 px-4 rounded-lg hover:bg-error-container hover:text-on-error-container transition-all"
+                    className="flex-1 bg-error-container/20 border border-error-container/40 text-error font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-error hover:text-on-error hover:shadow-[0_0_16px_rgba(255,84,73,0.4)] transition-all"
                   >
                     Decline
                   </button>
                   <button
                     onClick={() => handleAction('postpone')}
-                    className="flex-1 border border-outline-variant bg-transparent text-on-surface font-body-sm text-body-sm font-semibold py-2.5 px-4 rounded-lg hover:bg-surface-variant transition-colors"
+                    className="flex-1 border border-white/20 bg-white/5 text-on-surface font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-white/10 hover:border-white/30 transition-all"
                   >
                     Postpone
                   </button>
@@ -275,18 +278,18 @@ export default function UnderwritingPage() {
               </section>
 
               {/* Right: Citation / document viewer */}
-              <section className="w-1/2 flex flex-col bg-surface-container-lowest overflow-hidden">
+              <section className="w-1/2 flex flex-col bg-white/[0.02] overflow-hidden">
                 <CitationViewer activeCitation={activeCitation} className="flex-1 min-h-0" />
               </section>
             </>
           ) : (
             /* Empty state */
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
-              <div className="w-16 h-16 rounded-2xl bg-surface-container border border-outline-variant flex items-center justify-center text-on-surface-variant">
-                <span className="material-symbols-outlined text-3xl">description</span>
+            <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center p-8">
+              <div className="w-20 h-20 rounded-3xl glass-card border border-white/10 flex items-center justify-center text-on-surface-variant shadow-inner">
+                <span className="material-symbols-outlined text-[40px] opacity-70">description</span>
               </div>
               <div>
-                <p className="font-headline-md text-headline-md text-on-surface">Select an application</p>
+                <p className="font-display text-[28px] text-on-surface">Select an application</p>
                 <p className="font-body-sm text-body-sm text-on-surface-variant mt-1 max-w-xs">
                   Choose a case from the review queue to launch the AI underwriting analysis.
                 </p>
@@ -297,9 +300,9 @@ export default function UnderwritingPage() {
 
         {/* Score card — below the split (only when app selected) */}
         {selectedApp && (
-          <div className="shrink-0 px-6 py-4 border-t border-outline-variant bg-surface-container-lowest">
+          <div className="shrink-0 px-8 py-5 border-t border-white/10 bg-black/20 backdrop-blur-md">
             {isLoadingDecision
-              ? <div className="h-20 rounded-xl bg-surface-container animate-pulse" />
+              ? <div className="h-20 rounded-2xl bg-white/5 animate-pulse" />
               : <ScoreCard decision={decision} />
             }
           </div>

@@ -217,10 +217,10 @@ def _to_edi_payload(
         diagnosis_codes=body.diagnosis_codes,
         procedure_lines=[
             EDIProcedureLine(
-                line_number=l.line_number,
-                procedure_code=l.procedure_code,
-                modifier=l.modifier,
-                units=l.units,
+                line_number=ln.line_number,
+                procedure_code=ln.procedure_code,
+                modifier=ln.modifier,
+                units=ln.units,
                 charge_amount=ln.charge_amount,
                 place_of_service=ln.place_of_service,
                 rendering_provider_npi=ln.rendering_provider_npi,
@@ -504,6 +504,7 @@ async def submit_claim(
         claim_number=body.claim_number,
         policy_id=body.policy_id,
         claimant_id=current_user.id,
+        tenant_id=current_user.tenant_id,
         edi_transaction_set=body.edi_transaction_set,
         edi_interchange_control_number=body.edi_interchange_control_number,
         billing_provider_npi=body.billing_provider_npi,
@@ -528,7 +529,7 @@ async def list_claims(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PaginatedClaimsResponse:
-    stmt = select(Claim)
+    stmt = select(Claim).where(Claim.tenant_id == current_user.tenant_id)
     if current_user.role == UserRole.INSURED:
         stmt = stmt.where(Claim.claimant_id == current_user.id)
     if status_filter:
@@ -550,7 +551,12 @@ async def get_claim(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ClaimResponse:
-    claim = (await db.execute(select(Claim).where(Claim.id == claim_id))).scalar_one_or_none()
+    claim = (await db.execute(
+        select(Claim).where(
+            Claim.id == claim_id,
+            Claim.tenant_id == current_user.tenant_id
+        )
+    )).scalar_one_or_none()
     if claim is None:
         raise HTTPException(status_code=404, detail="Claim not found.")
     if current_user.role == UserRole.INSURED and claim.claimant_id != current_user.id:
@@ -570,7 +576,12 @@ async def update_claim_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ClaimResponse:
-    claim = (await db.execute(select(Claim).where(Claim.id == claim_id))).scalar_one_or_none()
+    claim = (await db.execute(
+        select(Claim).where(
+            Claim.id == claim_id,
+            Claim.tenant_id == current_user.tenant_id
+        )
+    )).scalar_one_or_none()
     if claim is None:
         raise HTTPException(status_code=404, detail="Claim not found.")
 

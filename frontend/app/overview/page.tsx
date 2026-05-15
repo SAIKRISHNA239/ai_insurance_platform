@@ -106,14 +106,18 @@ export default function OverviewPage() {
   ] : [];
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-background">
-      <div className="max-w-[1440px] mx-auto flex flex-col gap-6">
+    <div className="h-full overflow-hidden relative p-8">
+      {/* Mesh floating backgrounds */}
+      <div className="absolute top-[5%] right-[15%] w-[400px] h-[400px] bg-secondary/10 rounded-full blur-[100px] mix-blend-screen pointer-events-none animate-float" />
+      <div className="absolute bottom-[20%] left-[10%] w-[500px] h-[500px] bg-primary/10 rounded-full blur-[120px] mix-blend-screen pointer-events-none animate-float" style={{ animationDelay: '3s' }} />
+
+      <div className="max-w-[1440px] mx-auto flex flex-col gap-8 relative z-10 h-full overflow-y-auto no-scrollbar">
 
         {/* ── Page Header ─────────────────────────────────────────────── */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
-            <h2 className="font-headline-lg text-headline-lg text-on-surface">System Overview</h2>
-            <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
+            <h2 className="font-display text-[40px] text-on-surface leading-tight tracking-tight drop-shadow-md">System Overview</h2>
+            <p className="font-body-lg text-on-surface-variant mt-2">
               Real-time intelligence and claims activity.
             </p>
           </div>
@@ -135,17 +139,19 @@ export default function OverviewPage() {
             : kpiCards.map((card) => (
                 <div
                   key={card.label}
-                  className="bg-surface-container-low border border-outline-variant rounded-xl p-5 flex flex-col gap-3 relative overflow-hidden group"
+                  className="glass-card rounded-2xl p-6 flex flex-col gap-4 relative overflow-hidden group transition-all duration-300 hover:-translate-y-1"
                 >
-                  <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                   <div className="flex justify-between items-start">
-                    <h3 className="font-body-sm text-body-sm text-on-surface-variant">{card.label}</h3>
-                    <span className={`material-symbols-outlined ${card.color}`}>{card.icon}</span>
+                    <h3 className="font-body-sm text-on-surface-variant uppercase tracking-wider font-semibold">{card.label}</h3>
+                    <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+                      <span className={`material-symbols-outlined text-[20px] ${card.color}`}>{card.icon}</span>
+                    </div>
                   </div>
-                  <span className="font-display text-display text-on-surface">{card.value}</span>
-                  <div className={`flex items-center text-sm mt-1 ${card.trendColor}`}>
+                  <span className="font-display text-[48px] text-on-surface tracking-tight drop-shadow-sm">{card.value}</span>
+                  <div className={`flex items-center text-sm ${card.trendColor}`}>
                     <span className="material-symbols-outlined text-sm mr-1">{card.trendIcon}</span>
-                    <span className="font-data-mono text-data-mono">{card.trend}</span>
+                    <span className="font-label-caps">{card.trend}</span>
                   </div>
                 </div>
               ))
@@ -156,23 +162,23 @@ export default function OverviewPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
           {/* Recent Claims */}
-          <div className="bg-surface-container-low border border-outline-variant rounded-xl flex flex-col overflow-hidden">
-            <div className="px-5 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-container-low">
-              <h3 className="font-headline-md text-headline-md text-on-surface">Recent Claims</h3>
-              <a href="/claims" className="font-body-sm text-body-sm text-primary flex items-center hover:opacity-80 transition-opacity">
-                View All <span className="material-symbols-outlined text-sm ml-1">chevron_right</span>
+          <div className="glass-panel rounded-2xl flex flex-col overflow-hidden transition-all duration-300 hover:shadow-2xl">
+            <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+              <h3 className="font-headline-md text-[18px] text-on-surface">Recent Claims</h3>
+              <a href="/claims" className="font-label-caps px-4 py-2 rounded-full border border-white/10 bg-white/5 text-primary flex items-center gap-1 hover:bg-white/10 hover:text-primary-container transition-all">
+                View All <span className="material-symbols-outlined text-[14px]">chevron_right</span>
               </a>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-surface-container border-b border-outline-variant font-label-caps text-label-caps text-on-surface-variant uppercase">
+                  <tr className="bg-black/20 border-b border-white/5 font-label-caps text-on-surface-variant tracking-wider uppercase">
                     {['Claim #', 'Billed', 'Status'].map((h) => (
-                      <th key={h} className="px-5 py-3 font-semibold">{h}</th>
+                      <th key={h} className="px-6 py-4 font-semibold">{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="font-body-sm text-body-sm divide-y divide-outline-variant/50">
+                <tbody className="font-body-sm divide-y divide-white/5">
                   {loading
                     ? Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={3} />)
                     : claims.length === 0
@@ -197,23 +203,23 @@ export default function OverviewPage() {
           </div>
 
           {/* Recent Applications */}
-          <div className="bg-surface-container-low border border-outline-variant rounded-xl flex flex-col overflow-hidden">
-            <div className="px-5 py-4 border-b border-outline-variant flex justify-between items-center bg-surface-container-low">
-              <h3 className="font-headline-md text-headline-md text-on-surface">Recent Applications</h3>
-              <a href="/applications" className="font-body-sm text-body-sm text-primary flex items-center hover:opacity-80 transition-opacity">
-                View All <span className="material-symbols-outlined text-sm ml-1">chevron_right</span>
+          <div className="glass-panel rounded-2xl flex flex-col overflow-hidden transition-all duration-300 hover:shadow-2xl">
+            <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+              <h3 className="font-headline-md text-[18px] text-on-surface">Recent Applications</h3>
+              <a href="/applications" className="font-label-caps px-4 py-2 rounded-full border border-white/10 bg-white/5 text-primary flex items-center gap-1 hover:bg-white/10 hover:text-primary-container transition-all">
+                View All <span className="material-symbols-outlined text-[14px]">chevron_right</span>
               </a>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-surface-container border-b border-outline-variant font-label-caps text-label-caps text-on-surface-variant uppercase">
+                  <tr className="bg-black/20 border-b border-white/5 font-label-caps text-on-surface-variant tracking-wider uppercase">
                     {['App #', 'Score', 'Status'].map((h) => (
-                      <th key={h} className="px-5 py-3 font-semibold">{h}</th>
+                      <th key={h} className="px-6 py-4 font-semibold">{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="font-body-sm text-body-sm divide-y divide-outline-variant/50">
+                <tbody className="font-body-sm divide-y divide-white/5">
                   {loading
                     ? Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={3} />)
                     : apps.length === 0

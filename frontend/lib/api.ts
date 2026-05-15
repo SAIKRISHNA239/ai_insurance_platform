@@ -218,6 +218,73 @@ export const authAPI = {
     apiFetch("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
 };
 
+// ─── Marketplace API (Simulated) ────────────────────────────────────────────────
+
+export interface MarketplacePlan {
+  id: string;
+  name: string;
+  badge: string;
+  badgeClass: string;
+  badgeDot: string | null;
+  badgeIcon: string | null;
+  price: string;
+  priceColor: string;
+  features: string[];
+  checkColor: string;
+  featured: boolean;
+}
+
+export const marketplaceAPI = {
+  listPlans: async (): Promise<MarketplacePlan[]> => {
+    // Simulate a network request to fetch available plans
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve([
+          {
+            id: "plan-1",
+            name: 'Care Elite',
+            badge: 'Comprehensive',
+            badgeClass: 'bg-secondary-container/20 text-secondary border-secondary/30',
+            badgeDot: 'bg-secondary',
+            badgeIcon: null,
+            price: '$850',
+            priceColor: 'text-primary',
+            features: ['Full catastrophic risk coverage', 'No deductible for chronic care', 'Premium network access'],
+            checkColor: 'text-secondary',
+            featured: false,
+          },
+          {
+            id: "plan-2",
+            name: 'Health Max',
+            badge: 'AI Recommended',
+            badgeClass: 'bg-primary-container/20 text-primary border-primary/30',
+            badgeDot: null,
+            badgeIcon: 'auto_awesome',
+            price: '$620',
+            priceColor: 'text-primary',
+            features: ['Optimized for chronic conditions (Asthma)', 'High-tier pharmacy benefits', 'Telehealth specialist network'],
+            checkColor: 'text-primary',
+            featured: true,
+          },
+          {
+            id: "plan-3",
+            name: 'Base Shield',
+            badge: 'Essential',
+            badgeClass: 'bg-surface-variant text-on-surface-variant border-outline-variant',
+            badgeDot: null,
+            badgeIcon: null,
+            price: '$340',
+            priceColor: 'text-on-surface-variant',
+            features: ['Standard preventive care', 'High deductible model', 'Local network only'],
+            checkColor: 'text-outline',
+            featured: false,
+          },
+        ]);
+      }, 800); // 800ms artificial delay for smooth loading animation
+    });
+  }
+};
+
 // ─── Applications API ──────────────────────────────────────────────────────────
 
 export const applicationsAPI = {

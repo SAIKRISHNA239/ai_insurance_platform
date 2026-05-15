@@ -35,9 +35,9 @@ class PolicyCreateRequest(BaseModel):
     policy_number: str = Field(max_length=64)
     holder_id: uuid.UUID
     policy_type: PolicyType
-    premium_amount: Decimal = Field(gt=0)
-    coverage_limit: Decimal = Field(gt=0)
-    deductible: Decimal = Field(ge=0, default=Decimal("0.00"))
+    premium_amount: Decimal = Field(gt=Decimal("0"))
+    coverage_limit: Decimal = Field(gt=Decimal("0"))
+    deductible: Decimal = Field(ge=Decimal("0"), default=Decimal("0.00"))
     out_of_pocket_max: Decimal | None = None
     effective_date: date
     expiry_date: date
@@ -97,7 +97,7 @@ async def create_policy(
             detail="A policy with this number already exists.",
         )
 
-    policy = Policy(**body.model_dump())
+    policy = Policy(**body.model_dump(), tenant_id=current_user.tenant_id)
     db.add(policy)
     await db.flush()
 
@@ -117,7 +117,7 @@ async def list_policies(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PaginatedPoliciesResponse:
-    stmt = select(Policy)
+    stmt = select(Policy).where(Policy.tenant_id == current_user.tenant_id)
 
     if current_user.role == UserRole.INSURED:
         stmt = stmt.where(Policy.holder_id == current_user.id)
@@ -145,7 +145,12 @@ async def get_policy(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PolicyResponse:
-    result = await db.execute(select(Policy).where(Policy.id == policy_id))
+    result = await db.execute(
+        select(Policy).where(
+            Policy.id == policy_id,
+            Policy.tenant_id == current_user.tenant_id
+        )
+    )
     policy = result.scalar_one_or_none()
 
     if policy is None:

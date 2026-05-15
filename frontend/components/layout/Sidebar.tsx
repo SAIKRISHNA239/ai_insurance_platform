@@ -28,7 +28,7 @@ export default function Sidebar() {
     <nav
       className="
         hidden md:flex flex-col h-screen w-64 shrink-0
-        border-r border-outline-variant bg-surface-container-low py-8 z-40
+        border-r border-white/5 glass-panel py-8 z-40 shadow-[4px_0_24px_rgba(0,0,0,0.2)]
       "
     >
       {/* ── Logo ────────────────────────────────────────────────────────── */}
@@ -60,11 +60,11 @@ export default function Sidebar() {
               key={item.href}
               href={item.href}
               className={`
-                relative flex items-center gap-3 px-4 py-3 rounded-lg
-                font-body-sm text-body-sm tracking-tight transition-colors
+                relative flex items-center gap-3 px-4 py-3 rounded-xl
+                font-body-sm tracking-tight transition-all duration-300
                 ${active
-                  ? 'text-secondary font-bold bg-surface-variant/50'
-                  : 'text-on-surface-variant hover:bg-surface-variant'}
+                  ? 'text-secondary font-bold bg-white/10 shadow-sm backdrop-blur-sm'
+                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface hover:pl-5'}
               `}
             >
               {/* Active indicator bar */}

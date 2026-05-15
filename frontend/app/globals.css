@@ -35,3 +35,40 @@
 .animate-in        { animation: fade-in 200ms ease both; }
 .fade-in           { animation-name: fade-in; }
 .slide-in-from-bottom-2 { animation-name: slide-from-bottom; }
+
+/* ── Premium Mesh Gradients & Glassmorphism ──────────────────────────────── */
+.mesh-gradient-bg {
+  background-color: #0b0e15;
+  background-image: 
+    radial-gradient(at 0% 0%, hsla(220,100%,15%,0.3) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, hsla(160,100%,12%,0.2) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, hsla(240,100%,15%,0.3) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, hsla(200,100%,10%,0.3) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+.glass-panel {
+  background: rgba(25, 27, 35, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+.glass-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
