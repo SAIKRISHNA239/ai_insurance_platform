@@ -1,9 +1,9 @@
 {
   "/overview/page": "app/overview/page.js",
-  "/page": "app/page.js",
-  "/login/page": "app/login/page.js",
-  "/underwriting/page": "app/underwriting/page.js",
   "/claims/page": "app/claims/page.js",
+  "/support/page": "app/support/page.js",
   "/marketplace/page": "app/marketplace/page.js",
-  "/applications/page": "app/applications/page.js"
+  "/applications/page": "app/applications/page.js",
+  "/login/page": "app/login/page.js",
+  "/underwriting/page": "app/underwriting/page.js"
 }
