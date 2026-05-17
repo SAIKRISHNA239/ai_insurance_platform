@@ -36,7 +36,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Any
+
 
 import structlog
 from sqlalchemy import select

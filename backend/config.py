@@ -8,7 +8,7 @@ All values are read from environment variables (or a .env file).
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyUrl, Field, PostgresDsn, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

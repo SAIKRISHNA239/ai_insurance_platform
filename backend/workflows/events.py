@@ -53,12 +53,10 @@ All clean claims route to AUTO_ADJUDICATED (STP).
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -148,7 +146,7 @@ class ClaimValidatedEvent:
         if not self.id:
             self.id = str(uuid.uuid4())
         if not self.time:
-            self.time = datetime.utcnow().isoformat() + "Z"
+            self.time = datetime.now(timezone.utc).isoformat() + "Z"
 
 
 def _serialize_decimal(obj: Any) -> Any:
@@ -192,7 +190,7 @@ class _MockKafkaProducer:
             "topic": topic,
             "key": key.decode() if key else None,
             "value": json.loads(value.decode()),
-            "published_at": datetime.utcnow().isoformat(),
+            "published_at": datetime.now(timezone.utc).isoformat(),
         }
         self._published.append(record)
         logger.info(
@@ -308,13 +306,13 @@ async def publish_claim_validated(
     # Build procedure codes in a JSON-serializable format
     proc_lines = [
         {
-            "line_number": l.line_number,
-            "procedure_code": l.procedure_code,
-            "modifier": l.modifier,
-            "units": l.units,
-            "charge_amount": str(l.charge_amount),
+            "line_number": line.line_number,
+            "procedure_code": line.procedure_code,
+            "modifier": line.modifier,
+            "units": line.units,
+            "charge_amount": str(line.charge_amount),
         }
-        for l in payload.procedure_lines
+        for line in payload.procedure_lines
     ]
 
     event = ClaimValidatedEvent(
@@ -410,7 +408,7 @@ def evaluate_um_routing(
     triggers: list[str] = []
     risk_points: float = 0.0
 
-    procedure_codes = {l.procedure_code.strip() for l in payload.procedure_lines}
+    procedure_codes = {l.procedure_code.strip() for line in payload.procedure_lines}
 
     # ── Rule 1: Complex surgical CPT codes ────────────────────────────────
     complex_codes_found = procedure_codes & COMPLEX_CPT_SET
@@ -546,7 +544,7 @@ async def process_validated_claim(
         "triggers": routing.triggers,
         "risk_score": routing.risk_score,
         "rag_context_preview": rag_context[:200] if rag_context else None,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     try:
@@ -598,7 +596,7 @@ async def _invoke_rag_for_medical_necessity(
     try:
         dx_codes = ", ".join(payload.diagnosis_codes[:3])
         cpt_codes = ", ".join(
-            l.procedure_code for l in payload.procedure_lines[:3]
+            line.procedure_code for line in payload.procedure_lines[:3]
         )
         query = (
             f"Medical necessity and coverage policy for procedures {cpt_codes} "

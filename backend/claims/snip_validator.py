@@ -32,7 +32,6 @@ to maintain the highest standard of integrity.
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 from enum import IntEnum
@@ -40,7 +39,7 @@ from typing import Any
 
 import structlog
 
-from backend.claims.schemas import EDIClaimPayload, EDIProcedureLine
+from backend.claims.schemas import EDIClaimPayload
 
 logger = structlog.get_logger(__name__)
 

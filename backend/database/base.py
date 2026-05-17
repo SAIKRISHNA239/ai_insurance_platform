@@ -14,7 +14,7 @@ Design decisions:
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
+
 
 import structlog
 from sqlalchemy.ext.asyncio import (
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, MappedColumn
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import MetaData
 
 from backend.config import get_settings

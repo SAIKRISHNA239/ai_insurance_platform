@@ -67,12 +67,12 @@ services:
   # ─── FastAPI Backend ───────────────────────────────────────────────────────
   backend:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     container_name: insurance_backend
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     environment:
       # Override DB host to service name within Docker network
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-insurance_user}:${POSTGRES_PASSWORD:-insurance_pass}@postgres:5432/${POSTGRES_DB:-insurance_db}
@@ -82,9 +82,9 @@ services:
       - "8000:8000"
     volumes:
       # Hot-reload: mount source so changes reflect without rebuild in dev
-      - ../backend:/app/backend
-      - ../alembic:/app/alembic
-      - ../datasets:/app/datasets
+      - ./backend:/app/backend
+      - ./alembic:/app/alembic
+      - ./datasets:/app/datasets
     networks:
       - ai_insurance_net
     depends_on:

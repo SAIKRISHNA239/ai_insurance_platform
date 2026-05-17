@@ -62,11 +62,10 @@ to debug than choreography-based sagas (distributed event chains).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable, Coroutine
@@ -121,7 +120,7 @@ class SagaContext:
     step_outputs: dict[str, Any] = field(default_factory=dict)
     completed_steps: list[str] = field(default_factory=list)
     status: SagaStatus = SagaStatus.PENDING
-    started_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     error: str | None = None
 
 
@@ -137,7 +136,7 @@ class DLQEnvelope:
     claim_id: str
     retry_count: int = 0
     max_retries: int = 5
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     next_retry_at: str | None = None
 
 
@@ -154,7 +153,7 @@ async def step_reserve_claim(ctx: SagaContext) -> dict[str, Any]:
     # In production: UPDATE claims SET status='processing', saga_id=:saga_id
     # WHERE id=:claim_id AND status NOT IN ('processing', 'finalized')
     # If 0 rows updated → raise SagaDuplicateError (idempotency guard)
-    return {"reserved": True, "locked_at": datetime.utcnow().isoformat()}
+    return {"reserved": True, "locked_at": datetime.now(timezone.utc).isoformat()}
 
 
 async def compensate_reserve_claim(ctx: SagaContext) -> None:
@@ -209,7 +208,7 @@ async def step_queue_payment(ctx: SagaContext) -> dict[str, Any]:
     logger.info("saga_step_queue_payment", amount=paid, ref=payment_ref)
     # In production: POST to payment processor API
     # Raises PaymentProcessorError on failure → triggers saga rollback
-    return {"payment_reference": payment_ref, "payment_queued_at": datetime.utcnow().isoformat()}
+    return {"payment_reference": payment_ref, "payment_queued_at": datetime.now(timezone.utc).isoformat()}
 
 
 async def compensate_queue_payment(ctx: SagaContext) -> None:
@@ -223,7 +222,7 @@ async def step_finalize_claim(ctx: SagaContext) -> dict[str, Any]:
     """Step 5: Mark the claim as FINALIZED in PostgreSQL."""
     logger.info("saga_step_finalize_claim", claim_id=ctx.claim_id)
     # UPDATE claims SET status='finalized', finalized_at=NOW() WHERE id=:claim_id
-    return {"finalized_at": datetime.utcnow().isoformat()}
+    return {"finalized_at": datetime.now(timezone.utc).isoformat()}
 
 
 async def compensate_finalize_claim(ctx: SagaContext) -> None:

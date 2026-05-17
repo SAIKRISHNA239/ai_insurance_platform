@@ -69,9 +69,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -110,7 +109,7 @@ class RAGScores:
     answer_relevancy: float
     model_name: str
     prompt_version: str
-    evaluated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    evaluated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sample_count: int = 0
 
 
@@ -163,14 +162,15 @@ def register_prompt(
         with mlflow.start_run(run_name=f"prompt-{prompt_name}-{version[:8]}"):
             mlflow.set_tag("prompt_name", prompt_name)
             mlflow.set_tag("prompt_version", version)
-            mlflow.set_tag("registered_at", datetime.utcnow().isoformat())
+            mlflow.set_tag("registered_at", datetime.now(timezone.utc).isoformat())
 
             if metadata:
                 for k, v in metadata.items():
                     mlflow.set_tag(k, str(v))
 
             # Store the full template as a text artifact
-            import tempfile, pathlib
+            import pathlib
+            import tempfile
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
                 f.write(prompt_template)
                 tmp_path = f.name
@@ -271,7 +271,7 @@ async def run_ragas_evaluation(
             try:
                 import mlflow
                 mlflow.set_experiment(experiment_name)
-                with mlflow.start_run(run_name=f"ragas-{datetime.utcnow().strftime('%Y%m%d-%H%M')}"):
+                with mlflow.start_run(run_name=f"ragas-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}"):
                     mlflow.set_tag("embedding_model", model_name)
                     mlflow.set_tag("prompt_version", prompt_version)
                     mlflow.set_tag("judge_model", llm_judge_model)
@@ -342,7 +342,7 @@ async def run_shadow_evaluation(
     Returns:
         Dict with "production" and "shadow" RAGScores for comparison.
     """
-    from backend.rag.pipeline import run_rag_pipeline
+    from backend.rag.pipeline import run_rag_query
 
     prompt_version = "shadow_eval_stub"
 
@@ -350,16 +350,17 @@ async def run_shadow_evaluation(
         samples = []
         for query in test_queries:
             try:
-                result = await run_rag_pipeline(
+                result = await run_rag_query(
                     query=query,
                     collection_name=coll,
                     tenant_id="eval_tenant",
                     user_role="claims_adjuster",
                 )
+                contexts = [c.text for c in result.final_chunks] if result.final_chunks else [query]
                 samples.append(RAGEvalSample(
                     question=query,
-                    contexts=result.get("source_chunks", [query]),
-                    answer=result.get("answer", ""),
+                    contexts=contexts,
+                    answer=result.answer,
                 ))
             except Exception as exc:
                 logger.warning("shadow_eval_query_failed", query=query[:50], error=str(exc))

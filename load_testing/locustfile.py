@@ -64,7 +64,6 @@ from __future__ import annotations
 
 import random
 import uuid
-from decimal import Decimal
 
 from faker import Faker
 from locust import HttpUser, between, events, task
@@ -287,7 +286,7 @@ def on_test_stop(environment: Environment, **kwargs) -> None:
     rps = stats.current_rps
 
     print("\n" + "=" * 60)
-    print(f"  LOAD TEST SUMMARY")
+    print("  LOAD TEST SUMMARY")
     print(f"  Total Requests : {stats.num_requests}")
     print(f"  Total Failures : {stats.num_failures}")
     print(f"  Error Rate     : {error_rate:.2f}%")

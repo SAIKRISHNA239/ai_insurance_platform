@@ -24,7 +24,6 @@ The human underwriter makes the final, legally binding decision.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
 import structlog

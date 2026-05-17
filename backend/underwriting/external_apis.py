@@ -50,7 +50,6 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
 
 import structlog
 

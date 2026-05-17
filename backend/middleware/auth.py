@@ -25,7 +25,7 @@ This middleware provides a coarse-grained first-pass guard.
 from __future__ import annotations
 
 import re
-from typing import Callable
+
 
 import structlog
 from fastapi import status

@@ -14,6 +14,7 @@ The client is connection-pooled via httpx under the hood by the ChromaDB SDK.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 import chromadb
 import structlog
@@ -24,7 +25,7 @@ logger = structlog.get_logger(__name__)
 
 
 @lru_cache(maxsize=1)
-def get_chroma_client() -> chromadb.AsyncHttpClient:
+def get_chroma_client() -> Any:
     """
     Return a cached ChromaDB async HTTP client.
     Called once and reused across the application lifespan.
@@ -45,7 +46,7 @@ def get_chroma_client() -> chromadb.AsyncHttpClient:
 async def get_or_create_collection(
     collection_name: str,
     metadata: dict | None = None,
-) -> chromadb.Collection:
+) -> Any:
     """
     Idempotently get or create a ChromaDB collection.
 
@@ -65,13 +66,13 @@ async def get_or_create_collection(
     return collection
 
 
-async def get_claims_collection() -> chromadb.Collection:
+async def get_claims_collection() -> Any:
     """Shorthand for the claims vector collection."""
     settings = get_settings()
     return await get_or_create_collection(settings.chroma_collection_claims)
 
 
-async def get_policies_collection() -> chromadb.Collection:
+async def get_policies_collection() -> Any:
     """Shorthand for the policies vector collection."""
     settings = get_settings()
     return await get_or_create_collection(settings.chroma_collection_policies)

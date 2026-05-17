@@ -110,7 +110,7 @@ class OpenAIClient(BaseLLMClient):
         if response_format:
             kwargs["response_format"] = response_format
 
-        response = await self._client.chat.completions.create(**kwargs)
+        response: Any = await self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
     async def embed(self, text: str) -> list[float]:
@@ -155,12 +155,6 @@ class GeminiClient(BaseLLMClient):
         import asyncio
         from google.genai import types as genai_types
 
-        contents = [
-            genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=f"{system_prompt}\n\n{user_message}")],
-            )
-        ]
         config = genai_types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=max_tokens,
@@ -168,11 +162,11 @@ class GeminiClient(BaseLLMClient):
 
         # google-genai v2 sync → run in thread executor so we don't block the loop
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
+        response: Any = await loop.run_in_executor(
             None,
             lambda: self._client.models.generate_content(
                 model=self._model,
-                contents=contents,
+                contents=f"{system_prompt}\n\n{user_message}",
                 config=config,
             ),
         )
@@ -196,12 +190,6 @@ class GeminiClient(BaseLLMClient):
         import threading
         from google.genai import types as genai_types
 
-        contents = [
-            genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=f"{system_prompt}\n\n{user_message}")],
-            )
-        ]
         config = genai_types.GenerateContentConfig(
             temperature=temperature,
             max_output_tokens=max_tokens,
@@ -213,7 +201,7 @@ class GeminiClient(BaseLLMClient):
             try:
                 for chunk in self._client.models.generate_content_stream(
                     model=self._model,
-                    contents=contents,
+                    contents=f"{system_prompt}\n\n{user_message}",
                     config=config,
                 ):
                     if chunk.text:
@@ -239,7 +227,7 @@ class GeminiClient(BaseLLMClient):
         from google.genai import types as genai_types
 
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
+        response: Any = await loop.run_in_executor(
             None,
             lambda: self._client.models.embed_content(
                 model="text-embedding-004",
@@ -247,7 +235,9 @@ class GeminiClient(BaseLLMClient):
                 config=genai_types.EmbedContentConfig(output_dimensionality=768),
             ),
         )
-        return response.embeddings[0].values
+        if not response.embeddings:
+            return []
+        return list(response.embeddings[0].values)
 
 
 

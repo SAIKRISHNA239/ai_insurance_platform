@@ -32,7 +32,6 @@ from fastapi.responses import JSONResponse
 
 from backend.config import get_settings
 from backend.database.base import engine
-from backend.database.models import Base
 from backend.database.vector_client import get_chroma_client
 from backend.middleware.auth import JWTAuthMiddleware, RBACMiddleware
 

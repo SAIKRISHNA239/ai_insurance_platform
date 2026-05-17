@@ -51,12 +51,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.api.deps import get_current_user, get_db
-from backend.api.routers import claims as claims_router_module
+
 from backend.claims.snip_validator import (
     SNIPResult,
     SNIPTier,
@@ -271,7 +271,7 @@ def mock_policy_exists(db_session: AsyncSession):
         policy.holder_id = uuid.uuid4()
         policy.status = PolicyStatus.ACTIVE
 
-        async def _fake_execute(stmt):
+        async def _fake_execute(statement, *args, **kwargs):
             result = MagicMock()
             result.scalar_one_or_none.return_value = policy
             return result
@@ -484,9 +484,8 @@ class TestClaimsIntakeEndpoint:
             result.scalar_one_or_none.return_value = None
             return result
 
-        client.app.dependency_overrides[get_db]  # ensure override active
+        app.dependency_overrides[get_db]  # ensure override active
         with patch("backend.api.routers.claims.select"):
-            from backend.database.base import get_db as real_get_db
             # Patch the session.execute to return None for policy
             with patch(
                 "sqlalchemy.ext.asyncio.AsyncSession.execute",

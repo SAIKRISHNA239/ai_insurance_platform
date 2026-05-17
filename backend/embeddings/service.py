@@ -15,8 +15,6 @@ never the LLM client's embed() method directly.
 
 from __future__ import annotations
 
-import hashlib
-from functools import lru_cache
 
 import structlog
 
