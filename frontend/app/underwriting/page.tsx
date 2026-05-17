@@ -25,6 +25,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   type Application,
+  type ApplicationStatus,
   type Citation,
   type UnderwritingDecision,
   type UnderwritingRoute,
@@ -149,15 +150,18 @@ export default function UnderwritingPage() {
   const [isLoadingApps, setIsLoadingApps]   = useState(true);
   const [isLoadingDecision, setIsLoadingDecision] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting]     = useState(false);
 
-  // Load application queue
-  useEffect(() => {
+  // ── Load application queue (extracted so it can be called after a decision) ──
+  const loadApplications = useCallback(() => {
     setIsLoadingApps(true);
     applicationsAPI.list()
       .then((res) => setApplications(res.items))
       .catch(console.error)
       .finally(() => setIsLoadingApps(false));
   }, []);
+
+  useEffect(() => { loadApplications(); }, [loadApplications]);
 
   // Auto-select the first application once the queue is loaded
   useEffect(() => {
@@ -181,12 +185,39 @@ export default function UnderwritingPage() {
     setActiveCitation(citation);
   }, []);
 
-  const handleAction = useCallback((action: 'approve' | 'decline' | 'postpone') => {
-    if (!selectedApp) return;
+  // ── Action → ApplicationStatus mapping ────────────────────────────────────
+  const ACTION_STATUS_MAP: Record<'approve' | 'decline' | 'postpone', ApplicationStatus> = {
+    approve:  'approved',
+    decline:  'declined',
+    postpone: 'under_review',
+  };
+
+  const handleAction = useCallback(async (action: 'approve' | 'decline' | 'postpone') => {
+    if (!selectedApp || isSubmitting) return;
+
     const labels = { approve: 'Approved ✓', decline: 'Declined ✗', postpone: 'Postponed ⏸' };
-    setActionFeedback(`${labels[action]} — ${selectedApp.application_number}`);
-    setTimeout(() => setActionFeedback(null), 4000);
-  }, [selectedApp]);
+    setIsSubmitting(true);
+
+    try {
+      await applicationsAPI.submitDecision(selectedApp.id, {
+        status: ACTION_STATUS_MAP[action],
+      });
+      // Show success toast
+      setActionFeedback(`${labels[action]} — ${selectedApp.application_number}`);
+      // Deselect the decided application and refresh the queue
+      setSelectedApp(null);
+      loadApplications();
+    } catch (err: unknown) {
+      const detail =
+        err && typeof err === 'object' && 'detail' in err
+          ? String((err as { detail: unknown }).detail)
+          : 'An unexpected error occurred.';
+      setActionFeedback(`⚠ Error: ${detail}`);
+    } finally {
+      setIsSubmitting(false);
+      setTimeout(() => setActionFeedback(null), 5000);
+    }
+  }, [selectedApp, isSubmitting, loadApplications]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="h-full flex overflow-hidden relative">
@@ -258,19 +289,22 @@ export default function UnderwritingPage() {
                 <div className="shrink-0 px-6 py-5 border-t border-white/10 bg-black/20 flex gap-4 backdrop-blur-md">
                   <button
                     onClick={() => handleAction('approve')}
-                    className="flex-1 bg-primary/20 border border-primary/40 text-primary font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-primary hover:text-on-primary hover:shadow-[0_0_16px_rgba(77,142,255,0.4)] transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-black"
+                    disabled={isSubmitting}
+                    className="flex-1 bg-primary/20 border border-primary/40 text-primary font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-primary hover:text-on-primary hover:shadow-[0_0_16px_rgba(77,142,255,0.4)] transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-black disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-primary/20 disabled:hover:text-primary"
                   >
-                    Approve &amp; Issue
+                    {isSubmitting ? 'Submitting…' : 'Approve & Issue'}
                   </button>
                   <button
                     onClick={() => handleAction('decline')}
-                    className="flex-1 bg-error-container/20 border border-error-container/40 text-error font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-error hover:text-on-error hover:shadow-[0_0_16px_rgba(255,84,73,0.4)] transition-all"
+                    disabled={isSubmitting}
+                    className="flex-1 bg-error-container/20 border border-error-container/40 text-error font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-error hover:text-on-error hover:shadow-[0_0_16px_rgba(255,84,73,0.4)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Decline
                   </button>
                   <button
                     onClick={() => handleAction('postpone')}
-                    className="flex-1 border border-white/20 bg-white/5 text-on-surface font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-white/10 hover:border-white/30 transition-all"
+                    disabled={isSubmitting}
+                    className="flex-1 border border-white/20 bg-white/5 text-on-surface font-label-caps tracking-wider py-3 px-4 rounded-xl hover:bg-white/10 hover:border-white/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Postpone
                   </button>

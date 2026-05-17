@@ -1,40 +1,31 @@
 """
-backend/api/routers/claims.py  (v2 — EDA + SNIP rewrite)
-──────────────────────────────────────────────────────────
+backend/api/routers/claims.py  (v3 — EDA + SNIP + File Upload)
+----------------------------------------------------------------
 Claims HTTP router with Event-Driven Architecture and SNIP validation.
 
 ENDPOINT DESIGN: NON-BLOCKING INTAKE
-──────────────────────────────────────
-POST /claims/intake is the primary EDA entry point. It is designed to
-return HTTP 202 Accepted in < 100ms regardless of claim complexity.
+--------------------------------------
+POST /claims/intake  — JSON EDI 837 payload
+POST /claims/upload  — multipart PDF/PNG/JPG with mock EDI extraction
+Both return HTTP 202 Accepted in < 100ms.
 
-The endpoint does exactly three synchronous operations:
-  1. Validate the inbound payload (Pydantic).
-  2. Run SNIP validation (pure CPU, no I/O).
-  3. Persist the claim row to PostgreSQL.
-  4. Publish one event to Kafka.
+The shared _run_eda_intake() helper contains the full SNIP + Kafka +
+adjudication pipeline used by both intake endpoints, ensuring identical
+behaviour regardless of input format.
 
-It does NOT wait for:
-  • UM routing
-  • Fraud scoring
-  • RAG pipeline
-  • Payment calculation
-
-These are downstream async consumers of the Kafka event.
-
-The original CRUD endpoints (GET /claims/, GET /claims/{id}, PATCH status)
-are preserved unchanged for compatibility with the existing API contract.
+Legacy CRUD endpoints are preserved unchanged for API compatibility.
 """
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,9 +49,9 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/claims", tags=["Claims"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Pydantic Schemas — EDA Intake
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ProcedureLineRequest(BaseModel):
     """Single service line in the EDA claim intake payload."""
@@ -150,9 +141,9 @@ class ClaimIntakeResponse(BaseModel):
     submitted_at: str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Legacy CRUD Schemas (unchanged)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ClaimSubmitRequest(BaseModel):
     policy_id: uuid.UUID
@@ -196,14 +187,11 @@ class PaginatedClaimsResponse(BaseModel):
     items: list[ClaimResponse]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: Convert intake request → EDIClaimPayload
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Helper: Convert intake request to EDIClaimPayload DTO
+# -----------------------------------------------------------------------------
 
-def _to_edi_payload(
-    body: ClaimIntakeRequest,
-    claimant_id: uuid.UUID,
-) -> EDIClaimPayload:
+def _to_edi_payload(body: ClaimIntakeRequest, claimant_id: uuid.UUID) -> EDIClaimPayload:
     return EDIClaimPayload(
         transaction_set=body.transaction_set,
         interchange_control_number=body.interchange_control_number,
@@ -239,55 +227,35 @@ def _generate_claim_number(icn: str) -> str:
     return f"CLM-{prefix}-{suffix}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EDA Intake Endpoint
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Shared EDA Intake Service
+# -----------------------------------------------------------------------------
 
-@router.post(
-    "/intake",
-    response_model=ClaimIntakeResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="EDA claim intake — SNIP validation + Kafka publish",
-    description=(
-        "Non-blocking claim intake endpoint. Runs 7-tier SNIP validation, "
-        "persists the claim, publishes to Kafka, and returns 202 immediately. "
-        "UM routing and adjudication happen asynchronously downstream."
-    ),
-)
-async def intake_claim(
+async def _run_eda_intake(
     body: ClaimIntakeRequest,
+    db: AsyncSession,
+    current_user: User,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> ClaimIntakeResponse:
     """
-    EDA claim intake pipeline:
-      1. Verify policy access.
-      2. Convert to EDIClaimPayload DTO.
-      3. Run 7-tier SNIP validation.
-         → On failure: persist as SNIP_REJECTED, return 422 with details.
-         → On pass: continue.
-      4. Persist claim as RECEIVED → VALIDATED.
-      5. Publish `claims.validated` Kafka event.
-      6. Schedule UM routing as a background task.
-      7. Return 202 Accepted immediately.
-    """
-    # ── 1. Policy access check ─────────────────────────────────────────────
-    result = await db.execute(select(Policy).where(Policy.id == body.policy_id))
-    policy = result.scalar_one_or_none()
-    if policy is None:
-        raise HTTPException(status_code=404, detail="Policy not found.")
-    if current_user.role == UserRole.INSURED and policy.holder_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied to this policy.")
+    Core EDA intake pipeline shared by POST /claims/intake and POST /claims/upload.
 
+    Steps:
+      1. Convert ClaimIntakeRequest -> EDIClaimPayload DTO.
+      2. Run 7-tier SNIP validation.
+      3. Persist claim to PostgreSQL (always, even SNIP-rejected).
+      4. On SNIP fail: raise HTTP 422 with structured violation details.
+      5. Publish claims.validated Kafka event (non-fatal failure).
+      6. Schedule UM routing as background task.
+      7. Return 202 ClaimIntakeResponse.
+    """
     claim_number = _generate_claim_number(body.interchange_control_number)
     claim_id = str(uuid.uuid4())
     edi_payload = _to_edi_payload(body, current_user.id)
 
-    # ── 2. SNIP Validation ────────────────────────────────────────────────
+    # SNIP Validation
     snip_result_dict: dict[str, Any] = {}
     snip_failed = False
-
     try:
         snip_result = await validate_claim(edi_payload, claim_id)
         snip_result_dict = snip_result.to_dict()
@@ -302,10 +270,9 @@ async def intake_claim(
             violations=[v.error_code for v in snip_result.violations],
         )
 
-    # ── 3. Persist claim (ALWAYS — even SNIP-rejected claims) ─────────────
+    # Persist claim (always — even SNIP-rejected claims)
     initial_status = ClaimStatus.DENIED if snip_failed else ClaimStatus.SUBMITTED
 
-    # Map adjudication states to ORM ClaimStatus
     proc_codes_for_db = [
         {
             "line": ln.line_number,
@@ -322,7 +289,7 @@ async def intake_claim(
         claim_number=claim_number,
         policy_id=body.policy_id,
         claimant_id=current_user.id,
-        tenant_id=current_user.tenant_id,          # Multi-tenancy: inherited from JWT
+        tenant_id=current_user.tenant_id,
         edi_transaction_set=body.transaction_set,
         edi_interchange_control_number=body.interchange_control_number,
         billing_provider_npi=body.billing_provider_npi,
@@ -334,9 +301,6 @@ async def intake_claim(
         procedure_codes=proc_codes_for_db,
         place_of_service=body.place_of_service,
         status=initial_status,
-        # raw_edi_payload: store serialized EDI payload as JSONB audit record.
-        # This is the immutable source-of-truth for re-adjudication and dispute
-        # resolution (Phase 1 design requirement for the raw_edi_payload column).
         raw_edi_payload={
             "transaction_set": body.transaction_set,
             "interchange_control_number": body.interchange_control_number,
@@ -357,7 +321,7 @@ async def intake_claim(
     db.add(claim)
     await db.flush()
 
-    # ── 4a. SNIP rejected — return 422 with full violation details ─────────
+    # SNIP rejected — return 422 with full violation details
     if snip_failed:
         await db.commit()
         raise HTTPException(
@@ -384,7 +348,7 @@ async def intake_claim(
             },
         )
 
-    # ── 4b. Build transition record RECEIVED → VALIDATED ──────────────────
+    # Build transition record RECEIVED -> VALIDATED
     transition = build_transition_record(
         claim_id=claim_id,
         from_state=AdjudicationState.RECEIVED,
@@ -394,7 +358,7 @@ async def intake_claim(
         metadata=snip_result_dict,
     )
 
-    # ── 5. Publish to Kafka ────────────────────────────────────────────────
+    # Publish to Kafka (non-fatal on failure)
     kafka_failed = False
     try:
         await publish_claim_validated(
@@ -411,8 +375,6 @@ async def intake_claim(
             error=str(exc),
             msg="Claim persisted. Dead-letter retry will re-publish.",
         )
-        # Write dead-letter marker into ai_metadata
-        # Guard: ai_metadata may be None if the column default hasn't fired yet.
         existing_meta = claim.ai_metadata or {}
         claim.ai_metadata = {
             **existing_meta,
@@ -422,10 +384,7 @@ async def intake_claim(
         }
 
     await db.commit()
-
-    background_tasks.add_task(
-        _background_um_routing, claim_id, edi_payload
-    )
+    background_tasks.add_task(_background_um_routing, claim_id, edi_payload)
 
     logger.info(
         "claim_intake_accepted",
@@ -441,7 +400,7 @@ async def intake_claim(
         snip_status="passed",
         snip_failing_tier=None,
         snip_violations=[],
-        um_route=None,  # UM runs in background
+        um_route=None,
         um_triggers=[],
         message=(
             "Claim accepted and published for adjudication. "
@@ -451,17 +410,8 @@ async def intake_claim(
     )
 
 
-async def _background_um_routing(
-    claim_id: str,
-    payload: EDIClaimPayload,
-) -> None:
-    """
-    Background task: execute UM routing after the HTTP response is sent.
-
-    In production this logic moves to a dedicated Kafka consumer worker.
-    For the current phase, FastAPI BackgroundTasks provides immediate
-    async execution without blocking the HTTP response.
-    """
+async def _background_um_routing(claim_id: str, payload: EDIClaimPayload) -> None:
+    """Background task: execute UM routing after the HTTP response is sent."""
     try:
         transition, routing = await process_validated_claim(claim_id, payload)
         logger.info(
@@ -471,16 +421,163 @@ async def _background_um_routing(
             route=routing.route,
         )
     except Exception as exc:
-        logger.error(
-            "background_um_failed",
-            claim_id=claim_id,
-            error=str(exc),
+        logger.error("background_um_failed", claim_id=claim_id, error=str(exc))
+
+
+# -----------------------------------------------------------------------------
+# EDA Intake Endpoint — JSON (POST /claims/intake)
+# -----------------------------------------------------------------------------
+
+@router.post(
+    "/intake",
+    response_model=ClaimIntakeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="EDA claim intake — SNIP validation + Kafka publish",
+    description=(
+        "Non-blocking claim intake endpoint. Runs 7-tier SNIP validation, "
+        "persists the claim, publishes to Kafka, and returns 202 immediately. "
+        "UM routing and adjudication happen asynchronously downstream."
+    ),
+)
+async def intake_claim(
+    body: ClaimIntakeRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ClaimIntakeResponse:
+    # Verify policy access
+    result = await db.execute(select(Policy).where(Policy.id == body.policy_id))
+    policy = result.scalar_one_or_none()
+    if policy is None:
+        raise HTTPException(status_code=404, detail="Policy not found.")
+    if current_user.role == UserRole.INSURED and policy.holder_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied to this policy.")
+
+    return await _run_eda_intake(body, db, current_user, background_tasks)
+
+
+# -----------------------------------------------------------------------------
+# File Upload Endpoint — PDF/PNG/JPG (POST /claims/upload)
+# -----------------------------------------------------------------------------
+
+# NPI that passes the CMS Luhn checksum:
+# full = "80840" + "1234567893" = "808401234567893"
+# Luhn sum = 70 -> 70 % 10 == 0 -> valid
+_MOCK_BILLING_NPI       = "1234567893"
+_MOCK_DIAGNOSIS_CODES   = ["Z00.00"]   # Encounter for general adult examination
+_MOCK_CPT_CODE          = "99213"      # Office visit, established patient, low complexity
+_MOCK_CHARGE            = Decimal("250.00")
+_ALLOWED_UPLOAD_TYPES   = {"application/pdf", "image/png", "image/jpeg", "image/jpg"}
+
+
+def _build_mock_claim_request(policy_id: uuid.UUID, filename: str) -> ClaimIntakeRequest:
+    """
+    Generate a ClaimIntakeRequest from uploaded file metadata.
+
+    Uses a SHA-256 hash of the filename as the interchange_control_number seed,
+    so different filenames produce distinct claim numbers while the same file
+    is idempotent.  The generated payload is guaranteed to pass all 7 SNIP tiers:
+      - Tier 1: non-empty ICN, valid transaction_set, positive charge, 1+ line
+      - Tier 2: NPI passes Luhn, valid ICD-10 Z00.00, valid CPT 99213
+      - Tier 3: total_charge == sum(line charges) exactly (single line)
+      - Tiers 4-7: stub implementations — always pass
+
+    In production this step would call a document-intelligence service (e.g.
+    Google Document AI or Azure Form Recognizer) to extract real EDI fields.
+    """
+    icn = hashlib.sha256(filename.encode()).hexdigest()[:9].upper()
+
+    return ClaimIntakeRequest(
+        transaction_set="837P",
+        interchange_control_number=icn,
+        group_control_number=None,
+        billing_provider_npi=_MOCK_BILLING_NPI,
+        rendering_provider_npi=None,
+        policy_id=policy_id,
+        service_date_start=date.today(),
+        service_date_end=None,
+        place_of_service="11",           # Office
+        diagnosis_codes=_MOCK_DIAGNOSIS_CODES,
+        procedure_lines=[
+            ProcedureLineRequest(
+                line_number=1,
+                procedure_code=_MOCK_CPT_CODE,
+                modifier=None,
+                units=1,
+                charge_amount=_MOCK_CHARGE,
+                place_of_service="11",
+            )
+        ],
+        total_charge=_MOCK_CHARGE,       # Exact match -> Tier 3 passes
+    )
+
+
+@router.post(
+    "/upload",
+    response_model=ClaimIntakeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload claim document (PDF/PNG/JPG) — mock EDI extraction + EDA intake",
+    description=(
+        "Accepts a multipart/form-data file upload (PDF, PNG, or JPG). "
+        "Performs mock EDI 837 extraction (real OCR in production), then runs "
+        "the full SNIP validation, Kafka publish, and UM routing pipeline. "
+        "Returns 202 Accepted immediately; UM routing runs asynchronously."
+    ),
+)
+async def upload_claim(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="Claim document: PDF, PNG, or JPG"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ClaimIntakeResponse:
+    # Validate content type
+    content_type = (file.content_type or "").lower()
+    if content_type not in _ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                f"Unsupported file type '{content_type}'. "
+                "Accepted: application/pdf, image/png, image/jpeg."
+            ),
         )
 
+    # Resolve a policy_id for this tenant's user.
+    # In production the caller would pass an explicit policy_id.
+    policy_stmt = (
+        select(Policy)
+        .where(Policy.tenant_id == current_user.tenant_id)
+        .limit(1)
+    )
+    if current_user.role == UserRole.INSURED:
+        policy_stmt = policy_stmt.where(Policy.holder_id == current_user.id)
 
-# ─────────────────────────────────────────────────────────────────────────────
+    policy_row = (await db.execute(policy_stmt)).scalar_one_or_none()
+    if policy_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "No policy found for your account. "
+                "A policy must exist before a claim can be submitted."
+            ),
+        )
+
+    filename = file.filename or "uploaded_claim"
+    mock_body = _build_mock_claim_request(policy_row.id, filename)
+
+    logger.info(
+        "claim_upload_received",
+        filename=filename,
+        content_type=content_type,
+        policy_id=str(policy_row.id),
+        user_id=str(current_user.id),
+    )
+
+    return await _run_eda_intake(mock_body, db, current_user, background_tasks)
+
+
+# -----------------------------------------------------------------------------
 # Legacy CRUD Endpoints (preserved for API compatibility)
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @router.post(
     "/",
@@ -554,7 +651,7 @@ async def get_claim(
     claim = (await db.execute(
         select(Claim).where(
             Claim.id == claim_id,
-            Claim.tenant_id == current_user.tenant_id
+            Claim.tenant_id == current_user.tenant_id,
         )
     )).scalar_one_or_none()
     if claim is None:
@@ -579,7 +676,7 @@ async def update_claim_status(
     claim = (await db.execute(
         select(Claim).where(
             Claim.id == claim_id,
-            Claim.tenant_id == current_user.tenant_id
+            Claim.tenant_id == current_user.tenant_id,
         )
     )).scalar_one_or_none()
     if claim is None:

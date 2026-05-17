@@ -134,6 +134,28 @@ export interface PaginatedResponse<T> {
   items: T[];
 }
 
+/**
+ * Response from POST /claims/intake (HTTP 202 Accepted).
+ * Mirrors backend ClaimIntakeResponse schema.
+ */
+export interface ClaimIntakeResponse {
+  claim_id: string;
+  claim_number: string;
+  adjudication_state: string;
+  snip_status: 'passed' | 'rejected';
+  snip_failing_tier: number | null;
+  snip_violations: Array<{
+    tier: number;
+    error_code: string;
+    field: string | null;
+    message: string;
+  }>;
+  um_route: string | null;
+  um_triggers: string[];
+  message: string;
+  submitted_at: string;
+}
+
 // ─── Auth Types ────────────────────────────────────────────────────────────────
 
 export interface TokenResponse {
@@ -355,6 +377,21 @@ export const applicationsAPI = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+
+  /**
+   * Submit a new insurance application — POST /applications/.
+   * Maps to the backend ApplicationSubmitRequest schema.
+   */
+  submit: (payload: {
+    application_number: string;
+    policy_type: string;
+    requested_coverage_limit: string;
+    health_questionnaire?: Record<string, boolean | string | number>;
+  }): Promise<Application> =>
+    apiFetch('/applications/', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
 
 // ─── Claims API ────────────────────────────────────────────────────────────────
@@ -368,6 +405,39 @@ export const claimsAPI = {
 
   get: (claimId: string): Promise<Claim> =>
     apiFetch(`/claims/${claimId}`),
+
+  /**
+   * EDA claim intake — POST /claims/intake.
+   * Accepts a pre-parsed EDI 837 JSON payload.
+   * Returns HTTP 202 ClaimIntakeResponse on success.
+   * Throws APIError with structured SNIP violation details on HTTP 422.
+   */
+  intakeClaim: (payload: Record<string, unknown>): Promise<ClaimIntakeResponse> =>
+    apiFetch('/claims/intake', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /**
+   * File upload intake — POST /claims/upload.
+   * Accepts a PDF, PNG, or JPG file as multipart/form-data.
+   * The backend performs mock EDI 837 extraction then runs the full SNIP pipeline.
+   * Returns HTTP 202 ClaimIntakeResponse on success.
+   * NOTE: Do NOT set Content-Type header — the browser sets the multipart boundary.
+   */
+  uploadFile: (file: File): Promise<ClaimIntakeResponse> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = getStoredToken();
+    return fetch(`${API_V1}/claims/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ detail: 'Upload failed' }));
+        throw { detail: body.detail ?? body, status: res.status } as APIError;
+      }
+      return res.json() as Promise<ClaimIntakeResponse>;
+    });
+  },
 
   updateStatus: (
     claimId: string,
@@ -467,26 +537,142 @@ export interface DashboardStats {
 }
 
 /**
- * Derives dashboard KPI stats from paginated list endpoints.
- * In a production system this would be a dedicated /stats endpoint.
+ * Backend aggregate shape from GET /system/stats.
+ * Uses SQL COUNT() — no full rows are fetched.
+ */
+interface SystemStatsResponse {
+  total_claims: number;
+  total_applications: number;
+  approved_claims: number;
+  pending_applications: number;
+}
+
+/**
+ * Fetches dashboard KPI stats from the high-performance
+ * GET /system/stats endpoint (SQL COUNT aggregates, no full rows).
  */
 export async function getDashboardStats(): Promise<DashboardStats> {
-  const [claimsData, appsData] = await Promise.all([
-    claimsAPI.list(1),
-    applicationsAPI.list(1, 100),
-  ]);
-
-  const approvedClaims = claimsData.items.filter(
-    (c) => c.status === "approved"
-  ).length;
-  const pendingReview = appsData.items.filter(
-    (a) => a.status === "under_review"
-  ).length;
-
+  const raw = await apiFetch<SystemStatsResponse>('/system/stats');
   return {
-    totalClaims: claimsData.total,
-    totalApplications: appsData.total,
-    approvedClaims,
-    pendingReview,
+    totalClaims:       raw.total_claims,
+    totalApplications: raw.total_applications,
+    approvedClaims:    raw.approved_claims,
+    pendingReview:     raw.pending_applications,
   };
 }
+
+
+// --- Policies API ---
+
+export type PolicyStatus = 'pending' | 'active' | 'lapsed' | 'cancelled' | 'expired';
+export type PolicyType   = 'individual' | 'group' | 'medicare_supplement' | 'dental' | 'vision';
+
+export interface Policy {
+  id: string;
+  policy_number: string;
+  holder_id: string;
+  policy_type: PolicyType;
+  premium_amount: string;
+  coverage_limit: string;
+  deductible: string;
+  effective_date: string;
+  expiry_date: string;
+  status: PolicyStatus;
+  created_at: string;
+}
+
+export interface PolicyCreateRequest {
+  policy_number: string;
+  holder_id: string;
+  policy_type: PolicyType;
+  premium_amount: string;
+  coverage_limit: string;
+  deductible?: string;
+  out_of_pocket_max?: string;
+  effective_date: string;
+  expiry_date: string;
+  benefits_schedule?: Record<string, unknown>;
+}
+
+export const policiesAPI = {
+  list: (page = 1, policyStatus?: PolicyStatus): Promise<PaginatedResponse<Policy>> => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (policyStatus) params.set('status', policyStatus);
+    return apiFetch(`/policies/?${params}`);
+  },
+
+  get: (policyId: string): Promise<Policy> =>
+    apiFetch(`/policies/${policyId}`),
+
+  create: (payload: PolicyCreateRequest): Promise<Policy> =>
+    apiFetch('/policies/', { method: 'POST', body: JSON.stringify(payload) }),
+};
+
+// ─── Knowledge Base API ────────────────────────────────────────────────────────
+
+export interface KnowledgeUploadResponse {
+  document_id: string;
+  filename: string;
+  message: string;
+  status: string;
+}
+
+export interface EvaluationAccepted {
+  run_id: string;
+  message: string;
+  status_url: string;
+}
+
+export interface EvaluationStatus {
+  run_id: string;
+  state: 'queued' | 'running' | 'complete' | 'failed';
+  started_at: string;
+  completed_at: string | null;
+  scores: {
+    faithfulness: number;
+    context_precision: number;
+    context_recall: number;
+    answer_relevancy: number;
+  } | null;
+  error: string | null;
+}
+
+export const knowledgeAPI = {
+  /**
+   * Upload a PDF into the RAG knowledge base.
+   * Returns 202 Accepted — ingestion runs as a background task.
+   */
+  uploadDocument: (file: File): Promise<KnowledgeUploadResponse> => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiFetch('/knowledge/upload', {
+      method: 'POST',
+      body: form,
+      // Do NOT set Content-Type — browser sets multipart boundary automatically
+    });
+  },
+};
+
+// ─── MLOps API ────────────────────────────────────────────────────────────────
+
+export const mlopsAPI = {
+  /**
+   * Trigger a background RAGAS evaluation run.
+   * Returns 202 with a run_id to poll status.
+   */
+  triggerEvaluation: (
+    collectionName = 'policy_vectors',
+    modelName = 'text-embedding-004',
+  ): Promise<EvaluationAccepted> =>
+    apiFetch('/mlops/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ collection_name: collectionName, model_name: modelName }),
+    }),
+
+  /**
+   * Poll evaluation status by run_id.
+   */
+  getEvaluationStatus: (runId: string): Promise<EvaluationStatus> =>
+    apiFetch(`/mlops/evaluate/status/${runId}`),
+};
+

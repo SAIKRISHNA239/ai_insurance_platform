@@ -152,6 +152,14 @@ export default function ApplicationsPage() {
               {loading ? '…' : `${total} applications`} · Manage and track underwriting requests.
             </p>
           </div>
+          <a
+            href="/applications/new"
+            id="new-application-btn"
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-primary/20 border border-primary/30 text-primary font-label-caps text-sm tracking-widest uppercase hover:bg-primary hover:text-on-primary transition-all duration-200 shadow-lg hover:shadow-[0_8px_24px_rgba(77,142,255,0.3)] whitespace-nowrap"
+          >
+            <span className="material-symbols-outlined text-[18px]">add</span>
+            New Application
+          </a>
         </div>
 
         {/* Error */}
